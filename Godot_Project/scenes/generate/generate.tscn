@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://62rx1hxpfsmi"]
-
-[ext_resource type="Script" path="res://scripts/generate/mesh_scene.gd" id="1_a6pni"]
-
-[node name="Generate" type="Node3D"]
-script = ExtResource("1_a6pni")

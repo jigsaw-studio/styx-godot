@@ -15,7 +15,6 @@ var visualization_classes = {
     "matrix_3d_rain": Matrix3DRainVisualization,
     "matrix_background": MatrixBackgroundWindow,
     "matrix_domain": MatrixDomainWindow,
-    "matrix_debug": MatrixDebugWindow,
     "sphere": SphereVisualization,
     "left": LeftWindow,
     "right": RightWindow,

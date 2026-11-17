@@ -120,5 +120,4 @@ func _physics_process(delta):
     move_and_slide()
 
 func on_jump_button_pressed():
-    #jump_just_pressed = true
-    Globals.mesh_scene.generate()
+    jump_just_pressed = true

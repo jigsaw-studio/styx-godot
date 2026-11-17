@@ -5,13 +5,6 @@ var xr_interface : XRInterface
 
 func _ready():
 
-    # Initialize mesh generation scene
-    Globals.mesh_scene = load("res://scenes/generate/generate.tscn").instantiate()
-    $objects.add_child(Globals.mesh_scene)
-    
-    # Position the mesh scene appropriately for XR viewing
-    Globals.mesh_scene.position = Vector3(0, 1.2, -2)  # Place it at comfortable viewing distance
-    
     if not Globals.is_running_in_web:
         $ui/WebCanvasLayer.visible = false
         xr_interface = XRServer.find_interface("OpenXR")
@@ -54,8 +47,7 @@ func _ready():
     update_joystick_touch_pad(Globals.joystick_touch_pad_enabled)
 
     # Initialize visualizations after environment interface is established
-    if Globals.enable_visualizations:
-        initialize_visualizations()
+    initialize_visualizations()
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(_delta):
@@ -165,22 +157,15 @@ func update_joystick_touch_pad(enable : bool) -> void:
 
 func initialize_visualizations() -> void:
     var visualizations_scene = get_node_or_null("visualizations")
-    
+
     if visualizations_scene:
-        #visualizations_scene.show_visualization("sphere")
-        
         # The following visualizations entirely depend on shaders
         if not Globals.is_running_in_visionos:
             # Godot Vision does not currently support shaders
             visualizations_scene.show_visualization("matrix_3d_rain")
 
-            #visualizations_scene.show_visualization("matrix_background")
-            #visualizations_scene.show_visualization("matrix_domain")
-
-            #visualizations_scene.show_visualization("left")
-            #visualizations_scene.show_visualization("right")
-            #visualizations_scene.show_visualization("top")
-
-        #else:
-            #visualizations_scene.show_visualization("bar_chart_raw")
-            #visualizations_scene.show_visualization("bar_chart_remote")
+            visualizations_scene.show_visualization("matrix_background")
+            visualizations_scene.show_visualization("matrix_domain")
+        else:
+            visualizations_scene.show_visualization("bar_chart_raw")
+            visualizations_scene.show_visualization("bar_chart_remote")
