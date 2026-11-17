@@ -68,6 +68,7 @@ void fragment() {
     vec3 glass_here = in_cap ? cap_color : glass;
     vec3 text_here = in_cap ? cap_color : text_color;
 
+    float stripe = 0.25 * step(fract((u * size.x + d) / 0.6), 0.5);
     float fill = 0.10;
     float coverage = 0.0;
     if (flat_face) {
@@ -97,10 +98,10 @@ void fragment() {
         coverage = mix(far_cov, glyph, detail);
         if (stripes) {
             coverage *= 0.3;
-            fill += 0.25 * step(fract((u * size.x + d) / 0.6), 0.5);
+            fill += stripe;
         }
         if (in_cap && cap_stripes) {
-            fill += 0.25 * step(fract((u * size.x + d) / 0.6), 0.5);
+            fill += stripe;
         }
     }
     if (flat_face && in_cap && cap_stripes) {

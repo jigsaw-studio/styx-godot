@@ -18,9 +18,6 @@ void vertex() {
     dir = VERTEX;
 }
 
-float hash11(float x) {
-    return fract(sin(x * 127.1) * 43758.5453);
-}
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }

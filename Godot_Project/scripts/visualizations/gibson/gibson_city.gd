@@ -204,17 +204,7 @@ func _make_tower(host: String) -> void:
     node.material_override = material
     material.set_shader_parameter("atlas", GibsonFont.atlas())
     towers_root.add_child(node)
-    var label := Label3D.new()
-    label.name = "label"
-    label.text = host.to_upper()
-    if _font:
-        label.font = _font
-    label.font_size = 48
-    label.pixel_size = 0.006
-    label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-    label.shaded = false
-    label.outline_size = 0
-    label.no_depth_test = false
+    var label := _make_label(host)
     city_root.add_child(label)
     towers[host] = {
         "node": node, "material": material, "label": label, "row": {}, "tone": "normal",
@@ -233,18 +223,9 @@ func _sync_chips() -> void:
             chip.material_override = _chip_material
             chips_root.add_child(chip)
             _add_chip_rim(chip)
-            var chip_label := Label3D.new()
-            chip_label.text = str(source).to_upper()
-            if _font:
-                chip_label.font = _font
-            chip_label.font_size = 48
-            chip_label.pixel_size = 0.006
-            chip_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-            chip_label.shaded = false
-            chip_label.outline_size = 0
+            var chip_label := _make_label(str(source))
             chip_label.modulate = palette["text"]["normal"]
             chip_label.position = Vector3(0, 1.2, 0)
-            chip_label.name = "label"
             chip.add_child(chip_label)
             chips[source] = chip
         var p := GibsonLayout.chip_position(placement, source)
@@ -253,6 +234,19 @@ func _sync_chips() -> void:
         if not placement["home"].has(source):
             chips[source].queue_free()
             chips.erase(source)
+
+func _make_label(text: String) -> Label3D:
+    var label := Label3D.new()
+    label.name = "label"
+    label.text = text.to_upper()
+    if _font:
+        label.font = _font
+    label.font_size = 48
+    label.pixel_size = 0.006
+    label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+    label.shaded = false
+    label.outline_size = 0
+    return label
 
 func _make_chip_material() -> Material:
     var material := StandardMaterial3D.new()
@@ -324,7 +318,6 @@ func _style_key(t: Dictionary, fresh: bool) -> String:
 
 func _animate_towers(delta: float) -> void:
     var ease_k := 1.0 - exp(-delta / (HEIGHT_EASE_SECONDS / 4.0))
-    var open_pulse := 1.0
     for host in towers:
         var t: Dictionary = towers[host]
         t["height"] = lerpf(t["height"], t["target"], ease_k)
@@ -351,10 +344,9 @@ func _animate_towers(delta: float) -> void:
         # Brightness: activity (1: the Matrix feed has no ages), a slow pulse while a
         # connection is open, and a short boost when a car arrives.
         var row: Dictionary = t["row"]
-        var level := 0.35 + 0.65 * 1.0
+        var level := 1.0
         if int(row.get("open", 0)) > 0:
-            open_pulse = 1.0 + 0.15 * sin(TAU * clock / 2.0)
-            level *= open_pulse
+            level *= 1.0 + 0.15 * sin(TAU * clock / 2.0)
         var arrived: float = clock - t["arrived"]
         if arrived < ARRIVAL_SECONDS:
             level *= 1.0 + 0.25 * (1.0 - arrived / ARRIVAL_SECONDS)
@@ -459,44 +451,35 @@ func _run_traffic(delta: float) -> void:
     for n in range(cars.size()):
         var car: Dictionary = cars[n]
         var travelled: float = car["along"] if car["outbound"] else car["total"] - car["along"]
-        var at := _point_on(car, travelled)
-        var heading := _heading_on(car, travelled)
+        var seg := _segment_on(car, travelled)
+        var points: PackedVector2Array = car["points"]
+        var lengths: PackedFloat32Array = car["lengths"]
+        var seg_start: float = lengths[seg - 1] if seg > 0 else 0.0
+        var seg_len := lengths[seg] - seg_start
+        var k := 0.0 if seg_len <= 0.0 else clampf((travelled - seg_start) / seg_len, 0.0, 1.0)
+        var at := points[seg].lerp(points[seg + 1], k)
+        var d := points[seg + 1] - points[seg]
+        var heading := d.normalized() if d.length() > 0.0 else Vector2(0, -1)
         if not car["outbound"]:
             heading = -heading
         var yaw := atan2(-heading.x, -heading.y)   # the plane's head end is -Z
         var basis := Basis(Vector3.UP, yaw)
-        var scale_up := 1.0
-        var color: Color = car["color"]
+        var origin := Vector3(at.x, CAR_Y, at.y)
         if car["flash"] >= 0.0:
-            scale_up = 1.0 + 4.0 * (1.0 - car["flash"] / FLASH_SECONDS)
-            basis = basis * Basis.from_scale(Vector3(scale_up, 1.0, 0.4))
-        # The head is at the car's point: the 3 unit plane sits behind it.
-        var origin := Vector3(at.x, CAR_Y, at.y) - Vector3(heading.x, 0.0, heading.y) * 1.5
-        if car["flash"] >= 0.0:
-            origin = Vector3(at.x, CAR_Y, at.y)
+            basis = basis * Basis.from_scale(Vector3(1.0 + 4.0 * (1.0 - car["flash"] / FLASH_SECONDS), 1.0, 0.4))
+        else:
+            # The head is at the car's point: the 3 unit plane sits behind it.
+            origin -= Vector3(heading.x, 0.0, heading.y) * 1.5
         multimesh.set_instance_transform(n, Transform3D(basis, origin))
-        multimesh.set_instance_color(n, color)
+        multimesh.set_instance_color(n, car["color"])
 
-func _point_on(car: Dictionary, travelled: float) -> Vector2:
-    var points: PackedVector2Array = car["points"]
+# The index of the route segment `travelled` falls in.
+func _segment_on(car: Dictionary, travelled: float) -> int:
     var lengths: PackedFloat32Array = car["lengths"]
-    var start := 0.0
-    for i in range(lengths.size()):
-        if travelled <= lengths[i] or i == lengths.size() - 1:
-            var seg := lengths[i] - start
-            var k := 0.0 if seg <= 0.0 else clampf((travelled - start) / seg, 0.0, 1.0)
-            return points[i].lerp(points[i + 1], k)
-        start = lengths[i]
-    return points[points.size() - 1]
-
-func _heading_on(car: Dictionary, travelled: float) -> Vector2:
-    var points: PackedVector2Array = car["points"]
-    var lengths: PackedFloat32Array = car["lengths"]
-    for i in range(lengths.size()):
-        if travelled <= lengths[i] or i == lengths.size() - 1:
-            var d := points[i + 1] - points[i]
-            return d.normalized() if d.length() > 0.0 else Vector2(0, -1)
-    return Vector2(0, -1)
+    for i in range(lengths.size() - 1):
+        if travelled <= lengths[i]:
+            return i
+    return lengths.size() - 1
 
 # ---- schemes -------------------------------------------------------------------
 
