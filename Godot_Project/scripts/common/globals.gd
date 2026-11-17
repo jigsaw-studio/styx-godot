@@ -29,9 +29,24 @@ var api_relative: String = ""
 var api_poll_seconds: float = 0.0
 # Embedded in another page (Layman): no UI, fixed camera, Matrix only.
 var embed: bool = false
+# Which visualization to show: "matrix" (default) or "gibson".
+var viz: String = "matrix"
+# Gibson's colour scheme: "state" (default), "green", "cyan", "red", "night".
+var scheme: String = "state"
+# Native only, for checking a picture without a person: save one frame to this
+# PNG after shot_after seconds, then quit.
+var shot: String = ""
+var shot_after: float = 6.0
+
+const VIZ_IDS := ["matrix", "gibson"]
+const SCHEME_IDS := ["state", "green", "cyan", "red", "night"]
 
 func _init() -> void:
     _read_settings()
+    if is_running_in_web:
+        # Tell the page which views this build has (Layman reads it to know whether a
+        # build is new enough).
+        JavaScriptBridge.eval("window.styxViews = ['matrix', 'gibson'];", true)
 
 # Settings come from the page's query string (web) or from the command line
 # (native: --api=… --session=… --relative=… --poll=… after "--") and, for the
@@ -65,6 +80,24 @@ func _read_settings() -> void:
             api_poll_seconds = seconds
 
     embed = is_running_in_web and args.get("embed", "") == "1"
+
+    var wanted_viz: String = args.get("viz", "")
+    if VIZ_IDS.has(wanted_viz):
+        viz = wanted_viz
+
+    var wanted_scheme: String = args.get("scheme", "")
+    if SCHEME_IDS.has(wanted_scheme):
+        scheme = wanted_scheme
+
+    # A path the process may write: native only, absolute, a .png.
+    var wanted_shot: String = args.get("shot", "")
+    if not is_running_in_web and wanted_shot.begins_with("/") and wanted_shot.ends_with(".png"):
+        shot = wanted_shot
+    var after: String = args.get("shot-after", "")
+    if after.is_valid_float():
+        var secs := after.to_float()
+        if secs >= 1.0 and secs <= 120.0:
+            shot_after = secs
 
 func _matches(text: String, pattern: String) -> bool:
     var re := RegEx.new()

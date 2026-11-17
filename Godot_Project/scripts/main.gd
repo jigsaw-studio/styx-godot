@@ -196,6 +196,9 @@ func initialize_visualizations() -> void:
         # The following visualizations entirely depend on shaders
         if not Globals.is_running_in_visionos:
             # Godot Vision does not currently support shaders
+            if Globals.viz == "gibson":
+                visualizations_scene.show_visualization("gibson")
+                return
             # The walk-around rain competes with the plane when it is the whole picture
             if not Globals.embed:
                 visualizations_scene.show_visualization("matrix_3d_rain")
