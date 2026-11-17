@@ -5,6 +5,11 @@ var xr_interface : XRInterface
 
 func _ready():
 
+    if Globals.embed:
+        _setup_embed()
+        initialize_visualizations()
+        return
+
     if not Globals.is_running_in_web:
         $ui/WebCanvasLayer.visible = false
         xr_interface = XRServer.find_interface("OpenXR")
@@ -155,6 +160,35 @@ func update_joystick_touch_pad(enable : bool) -> void:
         $objects/joystick_touch_pad.visible = true
         $objects/joystick_touch_pad/head/Camera3D.current = true
 
+# Embedded in another page (Layman, "?embed=1"): the Matrix plane fills the frame,
+# on black, with no XR, no controls and a camera that cannot move.
+func _setup_embed() -> void:
+    Globals.joystick_touch_pad_enabled = true
+    update_joystick_touch_pad(true)
+
+    # A CanvasLayer is not hidden by its parent Control: hide both.
+    $ui.visible = false
+    $ui/WebCanvasLayer.visible = false
+
+    # Keys pressed in the host page must not walk the camera away.
+    var player = $objects/joystick_touch_pad
+    player.set_physics_process(false)
+    player.set_process_input(false)
+    player.set_process_unhandled_input(false)
+
+    $stage/Floor.visible = false
+
+    var environment: Environment = $env/WorldEnvironment.environment
+    environment.background_mode = Environment.BG_COLOR
+    environment.background_color = Color.BLACK
+
+    # The Matrix windows are 5 x 5 m planes at z = 6 facing +Z. With the default
+    # 75 degree vertical field of view the plane fills the height at
+    # 2.5 / tan(37.5 degrees) metres: put the camera there. On a wide frame the sides
+    # stay black; the plane is not stretched.
+    var distance := 2.5 / tan(deg_to_rad(37.5))
+    player.position = Vector3(0, 0, 6.0 + distance)
+
 func initialize_visualizations() -> void:
     var visualizations_scene = get_node_or_null("visualizations")
 
@@ -162,7 +196,9 @@ func initialize_visualizations() -> void:
         # The following visualizations entirely depend on shaders
         if not Globals.is_running_in_visionos:
             # Godot Vision does not currently support shaders
-            visualizations_scene.show_visualization("matrix_3d_rain")
+            # The walk-around rain competes with the plane when it is the whole picture
+            if not Globals.embed:
+                visualizations_scene.show_visualization("matrix_3d_rain")
 
             visualizations_scene.show_visualization("matrix_background")
             visualizations_scene.show_visualization("matrix_domain")

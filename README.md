@@ -72,6 +72,25 @@ The Styx project provides a boundary between your devices and the Underworld of 
         172.16.100.1:/srv/styx-web/html
     ```
 
+### Using Layman as the data source
+[Layman](https://github.com/castellotti/layman) can feed this app the destinations an AI coding agent reached, in the same shape as a Styx Pi. Its Styx extension serves `GET /api/styx/v1/matrix`; Layman's own docs (`docs/extensions/styx.md` in that repository) describe that side.
+
+Point the app at it, on the command line (arguments go after `--`) or, for the web export, in the page's query string:
+
+| Native argument | Web query | Meaning |
+|---|---|---|
+| `--api=http://host:8880/api/styx` | `?api=/api/styx` | Base URL of the feed (`http(s)://` only; on the web a path is relative to the page's origin). Also read from the `STYX_API_URL` environment variable. Unset: the Pi, as before |
+| `--session=<id>` | `&session=<id>` | One Layman session (`A-Z a-z 0-9 _ -`, up to 128 characters) |
+| `--relative=15m` | `&relative=15m` | How far back to look (`60s`, `15m`, `1h`, `1d`) |
+| `--poll=2` | `&poll=2` | Every N seconds (1 to 60) also ask for destinations not yet shown and add them at once. Off by default |
+| | `&embed=1` | Matrix only, on black, fixed camera, no controls: for an iframe |
+
+Values that do not match are ignored. For the Layman tab, export with the **Web (Layman)** preset (no third-party scripts, no threads, so it works in an iframe):
+```
+Godot --path Godot_Project --headless --export-release "Web (Layman)" build/layman/index.html
+```
+![The Matrix embedded](docs/images/styx-layman-embed.png)
+
 ### iOS and iPadOS
 - Reference: Godot [Exporting for iOS](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_ios.html) guide
 - In most cases the default settings for exporting to iOS should be sufficient
