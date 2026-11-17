@@ -13,6 +13,21 @@ var udp_client: PacketPeerUDP = PacketPeerUDP.new()
 var packet_fragments := {}
 
 var api_endpoint: String = ""
+var request_in_flight: bool = false  # HTTP only: a send while set is dropped, not queued
+
+# True when requests go over HTTP(S): always on web, and natively when
+# Globals.api_base_url is set (a Layman instance rather than the Pi).
+func _uses_http() -> bool:
+    return Globals.is_running_in_web or Globals.api_base_url != ""
+
+# The URL for api_endpoint, still written by callers as "/api/v1/…".
+func _http_url() -> String:
+    if Globals.api_base_url == "":
+        return "https://%s:%d%s" % [Globals.server_ip, Globals.server_port_tcp, api_endpoint]
+    var url: String = Globals.api_base_url + api_endpoint.trim_prefix("/api")
+    if Globals.api_extra_query != "":
+        url += ("&" if url.contains("?") else "?") + Globals.api_extra_query
+    return url
 
 # Initialize styx_api with a specific endpoint
 func init(api_path: String) -> void:
@@ -22,20 +37,22 @@ func init(api_path: String) -> void:
     api_endpoint = api_path
 
 func _ready():
-    if not Globals.is_running_in_web:
+    if _uses_http():
+        # Add HTTPRequest to the scene tree and connect signal
+        add_child(http_client)
+        http_client.connect("request_completed", self._process_response_http)
+        send_request()
+    else:
         # Create and bind the UDP client to any available port
         if udp_client and not udp_client.is_bound():  # Ensure it's not already bound
             var bind_result: int = udp_client.bind(0)
             if bind_result != OK:
                 print("Failed to bind UDP client, error code: ", bind_result)
-    else:
-        # Add HTTPRequest to the scene tree and connect signal
-        add_child(http_client)
-        http_client.connect("request_completed", self._process_response_http)
-        send_request()
 
 func send_request() -> void:
-    if not Globals.is_running_in_web:
+    if api_endpoint == "":
+        return  # init() has not been called: nothing to ask for
+    if not _uses_http():
         var json_data: Dictionary = {"GET": api_endpoint}
         var json_str: String = JSON.stringify(json_data)
 
@@ -48,18 +65,19 @@ func send_request() -> void:
         else:
             print("Failed to send request via UDP")
     else:
-        var status = http_client.get_http_client_status()
-        if status == HTTPClient.STATUS_DISCONNECTED:
-            var url = "https://%s:%d%s" % [Globals.server_ip, Globals.server_port_tcp, api_endpoint]
-            print("Connecting to URL: ", url)
-            var error = http_client.request(url, [], HTTPClient.METHOD_GET)
-            if error != OK:
-                print("Failed to initiate HTTP request. Error: ", error)
+        if request_in_flight:
+            print("Dropping HTTP request, one is still in flight")
+            return
+        var url := _http_url()
+        print("Connecting to URL: ", url)
+        var error = http_client.request(url, [], HTTPClient.METHOD_GET)
+        if error != OK:
+            print("Failed to initiate HTTP request. Error: ", error)
         else:
-            print("Delaying HTTP request, status: ", status)
+            request_in_flight = true
 
 func _process(_delta: float) -> void:
-    if not Globals.is_running_in_web:
+    if not _uses_http():
         receive_udp_response()
 
 func receive_udp_response() -> void:
@@ -104,6 +122,7 @@ func process_response_udp(response: String) -> void:
         packet_fragments.clear()
 
 func _process_response_http(_result, response_code: int, _headers, body: PackedByteArray) -> void:
+    request_in_flight = false
     if response_code == 200:
         var response: String = body.get_string_from_utf8()
         process_data(response)
@@ -117,10 +136,11 @@ func process_data(body: String) -> void:
 
     if json_result == OK:
         var parsed_data = json.get_data()
-        if parsed_data.size() > 0:
-            # Emit the data_received signal with the current endpoint and parsed data.
+        # An empty array is valid (a quiet session): emit it so old data can go.
+        # Anything that is not an array leaves the last data on screen.
+        if typeof(parsed_data) == TYPE_ARRAY:
             emit_signal("data_received", api_endpoint, parsed_data)
         else:
-            print("No data found in JSON response")
+            print("Unexpected JSON response, keeping the last data")
     else:
         print("Failed to parse JSON: ", body)
