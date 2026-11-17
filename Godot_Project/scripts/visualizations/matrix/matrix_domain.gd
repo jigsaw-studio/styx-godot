@@ -88,6 +88,7 @@ func _ready() -> void:
     # now: the main one just went.
     if Globals.api_poll_seconds > 0.0:
         peek_api = StyxApi.new()
+        peek_api.request_on_ready = false
         peek_api.init(API_ENDPOINT + API_PARAMS)
         peek_api.connect("data_received", Callable(self, "_on_peek_received"))
         add_child(peek_api)
@@ -176,6 +177,11 @@ func fade_out_all_domains() -> void:
                 if tracker.remaining == 0:
                     _on_all_domains_faded()
             )
+        else:
+            _remove_domain(domain)
+            tracker.remaining -= 1
+            if tracker.remaining == 0:
+                _on_all_domains_faded()
 
 func _on_all_domains_faded() -> void:
     fading = false
@@ -276,7 +282,7 @@ func prepare_batches() -> void:
     for domain in sorted_domains:
         all_domains.append({
             "domain": domain,
-            "speed": domain_speeds[domain]
+            "speed": domain_speeds.get(domain, min_rain_speed)
         })
     
     # Distribute domains across batches
@@ -299,6 +305,8 @@ func display_next_batch() -> void:
     var batch_domains = pending_batches[current_batch]
     
     for domain_data in batch_domains:
+        if active_domains.has(domain_data.domain):
+            continue  # already placed by the light refresh
         var column = get_available_column_for_batch(current_batch, domain_data.domain)
         if column != -1:
             create_single_domain(domain_data.domain, domain_data.speed, column)

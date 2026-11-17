@@ -79,7 +79,7 @@ Point the app at it, on the command line (arguments go after `--`) or, for the w
 
 | Native argument | Web query | Meaning |
 |---|---|---|
-| `--api=http://host:8880/api/styx` | `?api=/api/styx` | Base URL of the feed (`http(s)://` only; on the web a path is relative to the page's origin). Also read from the `STYX_API_URL` environment variable. Unset: the Pi, as before |
+| `--api=http://host:8880/api/styx` | `?api=/api/styx` | Base URL of the feed (`http(s)://` only; on the web only a path such as `/api/styx`, on the page's own origin). Also read from the `STYX_API_URL` environment variable. Unset: the Pi, as before |
 | `--session=<id>` | `&session=<id>` | One Layman session (`A-Z a-z 0-9 _ -`, up to 128 characters) |
 | `--relative=15m` | `&relative=15m` | How far back to look (`60s`, `15m`, `1h`, `1d`) |
 | `--poll=2` | `&poll=2` | Every N seconds (1 to 60) also ask for destinations not yet shown and add them at once. Off by default |

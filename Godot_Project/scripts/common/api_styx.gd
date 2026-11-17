@@ -13,6 +13,7 @@ var udp_client: PacketPeerUDP = PacketPeerUDP.new()
 var packet_fragments := {}
 
 var api_endpoint: String = ""
+var request_on_ready: bool = true  # false: the owner sends when it wants
 var request_in_flight: bool = false  # HTTP only: a send while set is dropped, not queued
 
 # True when requests go over HTTP(S): always on web, and natively when
@@ -40,8 +41,10 @@ func _ready():
     if _uses_http():
         # Add HTTPRequest to the scene tree and connect signal
         add_child(http_client)
+        http_client.timeout = 15.0  # a hung answer must not block every later request
         http_client.connect("request_completed", self._process_response_http)
-        send_request()
+        if request_on_ready:
+            send_request()
     else:
         # Create and bind the UDP client to any available port
         if udp_client and not udp_client.is_bound():  # Ensure it's not already bound

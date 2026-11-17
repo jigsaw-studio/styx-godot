@@ -43,17 +43,19 @@ func _read_settings() -> void:
     var api: String = args.get("api", "")
     if api == "" and not is_running_in_web:
         api = OS.get_environment("STYX_API_URL")
-    if api.begins_with("/") and is_running_in_web:
-        api = str(JavaScriptBridge.eval("window.location.origin", true)) + api
+    if is_running_in_web:
+        # On the web only a path on the page's own origin is accepted: a crafted
+        # link must not make the page contact (and draw hosts from) another site.
+        api = (str(JavaScriptBridge.eval("window.location.origin", true)) + api) if api.begins_with("/") and not api.begins_with("//") else ""
     if api.begins_with("http://") or api.begins_with("https://"):
         api_base_url = api.rstrip("/")
 
     var session: String = args.get("session", "")
-    if _matches(session, "^[A-Za-z0-9_-]{1,128}$"):
+    if _matches(session, "^[A-Za-z0-9_-]{1,128}\\z"):
         api_extra_query = "session=" + session
 
     var relative: String = args.get("relative", "")
-    if _matches(relative, "^[0-9]{1,6}[smhd]$"):
+    if _matches(relative, "^[0-9]{1,6}[smhd]\\z"):
         api_relative = relative
 
     var poll: String = args.get("poll", "")
