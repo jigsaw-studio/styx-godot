@@ -21,13 +21,17 @@ float hash21(vec2 q) {
 }
 
 // Coverage of a line of width w at distance d, anti-aliased, dimmed when narrower than a pixel.
-float line(float d, float w) {
-    float px = max(fwidth(d), 0.0001);
+// px: the size of a pixel in the plane's units, taken by the caller outside any branch.
+float line(float d, float w, float px) {
     float half_w = 0.5 * max(w, px);
     return (1.0 - smoothstep(half_w - 0.5 * px, half_w + 0.5 * px, abs(d))) * min(1.0, w / px);
 }
 
 void fragment() {
+    // Derivatives are taken here, before any branch.
+    float px_x = max(fwidth(p.x), 0.0001);
+    float px_z = max(fwidth(p.y), 0.0001);
+    float px_c = max(px_x, px_z);
     float sx = mod(p.x, 16.0) - 8.0;        // signed distance to the street line running along z
     float sz = mod(p.y, 16.0) - 8.0;        // ... and along x
     vec3 col = vec3(0.0);
@@ -40,8 +44,8 @@ void fragment() {
         float lane_z = hash21(vec2(float(i) + 7.0, floor(p.y / 16.0)));
         float pulse_x = 0.6 + 0.4 * smoothstep(0.9, 1.0, fract(p.y * 0.03 - TIME * 0.25 + lane_x));
         float pulse_z = 0.6 + 0.4 * smoothstep(0.9, 1.0, fract(p.x * 0.03 - TIME * 0.25 + lane_z));
-        col += tint * line(sx - off, 0.05) * pulse_x;
-        col += tint * line(sz - off, 0.05) * pulse_z;
+        col += tint * line(sx - off, 0.05, px_x) * pulse_x;
+        col += tint * line(sz - off, 0.05, px_z) * pulse_z;
     }
 
     // Inside blocks: finer, dimmer decoration, one choice per 1-unit cell.
@@ -55,16 +59,16 @@ void fragment() {
         if (h >= 0.4) {
             float kind = (h - 0.4) / 0.6;
             if (kind < 0.25) {
-                m = line(f.y, w) * step(abs(f.x), 0.5);                         // a horizontal segment
+                m = line(f.y, w, px_c) * step(abs(f.x), 0.5);                         // a horizontal segment
             } else if (kind < 0.5) {
-                m = line(f.x, w) * step(abs(f.y), 0.5);                         // a vertical segment
+                m = line(f.x, w, px_c) * step(abs(f.y), 0.5);                         // a vertical segment
             } else if (kind < 0.75) {
-                m = max(line(f.y, w) * step(f.x, 0.0) * step(-0.5, f.x),        // a corner
-                        line(f.x, w) * step(f.y, 0.0) * step(-0.5, f.y));
+                m = max(line(f.y, w, px_c) * step(f.x, 0.0) * step(-0.5, f.x),        // a corner
+                        line(f.x, w, px_c) * step(f.y, 0.0) * step(-0.5, f.y));
             } else {
                 vec2 a = abs(f) - vec2(0.3);                                    // a pad: a small outline
                 float ring = max(a.x, a.y);
-                m = line(ring, w) * step(max(abs(f.x), abs(f.y)), 0.34);
+                m = line(ring, w, px_c) * step(max(abs(f.x), abs(f.y)), 0.34);
             }
         }
         col += tint * m * 0.35;

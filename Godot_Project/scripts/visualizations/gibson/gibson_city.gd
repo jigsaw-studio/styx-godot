@@ -242,6 +242,7 @@ func _sync_chips() -> void:
             chip_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
             chip_label.shaded = false
             chip_label.outline_size = 0
+            chip_label.modulate = palette["text"]["normal"]
             chip_label.position = Vector3(0, 1.2, 0)
             chip_label.name = "label"
             chip.add_child(chip_label)
@@ -468,7 +469,7 @@ func _run_traffic(delta: float) -> void:
         var color: Color = car["color"]
         if car["flash"] >= 0.0:
             scale_up = 1.0 + 4.0 * (1.0 - car["flash"] / FLASH_SECONDS)
-            basis = basis.scaled(Vector3(scale_up, 1.0, 0.4))
+            basis = basis * Basis.from_scale(Vector3(scale_up, 1.0, 0.4))
         # The head is at the car's point: the 3 unit plane sits behind it.
         var origin := Vector3(at.x, CAR_Y, at.y) - Vector3(heading.x, 0.0, heading.y) * 1.5
         if car["flash"] >= 0.0:

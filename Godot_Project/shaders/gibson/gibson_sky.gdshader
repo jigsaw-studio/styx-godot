@@ -107,6 +107,6 @@ void fragment() {
     col += sky_wash * smoothstep(0.62, 0.9, streak) * 0.10;
 
     // 6. Below the horizon, the board.
-    col = mix(col, board, smoothstep(0.0, -0.1, d.y));
+    col = mix(col, board, 1.0 - smoothstep(-0.1, 0.0, d.y));
     ALBEDO = col * strength;
 }
