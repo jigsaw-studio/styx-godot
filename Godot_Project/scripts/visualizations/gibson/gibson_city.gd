@@ -11,7 +11,18 @@ const RISE_SECONDS := 1.2
 const HEIGHT_EASE_SECONDS := 0.6
 const BOARD_MARGIN := 96.0
 const HOME := "LOCAL"
+const MAX_CARS := 96
+const CAR_SPEED := 40.0
+const CAR_Y := 0.06
+const FLASH_SECONDS := 0.3
+const ARRIVAL_SECONDS := 0.4
+const BUSIEST_LABELS := 12
+const LABEL_RANGE := 60.0
 const TOWER_SHADER := preload("res://shaders/gibson/gibson_tower.gdshader")
+const GROUND_SHADER := preload("res://shaders/gibson/gibson_ground.gdshader")
+const SKY_SHADER := preload("res://shaders/gibson/gibson_sky.gdshader")
+const STREAK_SHADER := preload("res://shaders/gibson/gibson_streak.gdshader")
+const FONT_PATH := "res://assets/fonts/Michroma-Regular.ttf"
 
 var city_root: Node3D
 var ground: MeshInstance3D
@@ -19,6 +30,15 @@ var towers_root: Node3D
 var chips_root: Node3D
 var camera: GibsonCamera
 var api: StyxApi
+var sky: MeshInstance3D
+var streaks: MultiMeshInstance3D
+var _ground_material: ShaderMaterial
+var _sky_material: ShaderMaterial
+var _streak_material: ShaderMaterial
+var _rim_material: StandardMaterial3D
+var _font: Font = load(FONT_PATH) if ResourceLoader.exists(FONT_PATH) else null
+var cars: Array = []                 # {host, points, lengths, along, dir, color, flash}
+var links: Dictionary = {}           # host -> {next, seq}
 
 var scheme_id: String = "state"
 var palette: Dictionary = {}
@@ -50,7 +70,9 @@ func _ready() -> void:
     ground = MeshInstance3D.new()
     ground.name = "ground"
     ground.mesh = PlaneMesh.new()
-    ground.material_override = _make_ground_material()
+    _ground_material = ShaderMaterial.new()
+    _ground_material.shader = GROUND_SHADER
+    ground.material_override = _ground_material
     city_root.add_child(ground)
 
     towers_root = Node3D.new()
@@ -60,6 +82,38 @@ func _ready() -> void:
     chips_root = Node3D.new()
     chips_root.name = "chips"
     city_root.add_child(chips_root)
+
+    streaks = MultiMeshInstance3D.new()
+    streaks.name = "streaks"
+    var multimesh := MultiMesh.new()
+    multimesh.transform_format = MultiMesh.TRANSFORM_3D
+    multimesh.use_colors = true
+    var car_mesh := PlaneMesh.new()
+    car_mesh.size = Vector2(0.25, 3.0)
+    multimesh.mesh = car_mesh
+    multimesh.instance_count = MAX_CARS
+    multimesh.visible_instance_count = 0
+    streaks.multimesh = multimesh
+    _streak_material = ShaderMaterial.new()
+    _streak_material.shader = STREAK_SHADER
+    streaks.material_override = _streak_material
+    streaks.extra_cull_margin = 4096.0
+    city_root.add_child(streaks)
+
+    sky = MeshInstance3D.new()
+    sky.name = "sky"
+    var sphere := SphereMesh.new()
+    sphere.radius = 400.0
+    sphere.height = 800.0
+    sphere.radial_segments = 32
+    sphere.rings = 16
+    sky.mesh = sphere
+    _sky_material = ShaderMaterial.new()
+    _sky_material.shader = SKY_SHADER
+    _sky_material.set_shader_parameter("atlas", GibsonFont.atlas())
+    sky.material_override = _sky_material
+    sky.extra_cull_margin = 4096.0
+    add_child(sky)
 
     camera = GibsonCamera.new()
     camera.name = "camera"
@@ -76,6 +130,7 @@ func _ready() -> void:
     GibsonLayout.place(placement, [], [HOME])
     _sync_chips()
     _update_board()
+    _apply_scheme()
 
     if Globals.shot != "":
         _take_shot()
@@ -95,7 +150,9 @@ func _on_data(_endpoint: String, data: Array) -> void:
         known = {}
 
     var present := {}
+    var rank := -1
     for row in hosts:
+        rank += 1
         var host: String = row["host"]
         present[host] = true
         var is_new := not towers.has(host)
@@ -108,6 +165,17 @@ func _on_data(_endpoint: String, data: Array) -> void:
         t["side"] = sizes[host]["side"]
         var pos := GibsonLayout.tower_position(placement, host)
         t["node"].position = Vector3(pos.x, t["node"].position.y, pos.y)
+        var page := GibsonLayout.page_of(row)
+        if page != t["page"]:
+            t["page"] = page
+            var material: ShaderMaterial = t["material"]
+            material.set_shader_parameter("page", GibsonFont.page_texture(page))
+            material.set_shader_parameter("page_rows", float(clampi(page.size(), 1, GibsonFont.MAX_PAGE_ROWS)))
+        var label: Label3D = t["label"]
+        label.visibility_range_end = 0.0 if rank < BUSIEST_LABELS else LABEL_RANGE
+        t["route"] = GibsonLayout.route_of(GibsonLayout.chip_position(placement, HOME), pos)
+        if not links.has(host):
+            links[host] = {"next": GibsonLayout.hash01(host) * _interval_of(row), "seq": 0}
         if is_new:
             t["height"] = t["target"] if first else 0.0
         if not known.has(host):
@@ -117,7 +185,9 @@ func _on_data(_endpoint: String, data: Array) -> void:
     for host in towers.keys():
         if not present.has(host):
             towers[host]["node"].queue_free()
+            towers[host]["label"].queue_free()
             towers.erase(host)
+            links.erase(host)
             known.erase(host)
 
     extent = GibsonLayout.extent_of(placement)
@@ -132,10 +202,24 @@ func _make_tower(host: String) -> void:
     var material := ShaderMaterial.new()
     material.shader = TOWER_SHADER
     node.material_override = material
+    material.set_shader_parameter("atlas", GibsonFont.atlas())
     towers_root.add_child(node)
+    var label := Label3D.new()
+    label.name = "label"
+    label.text = host.to_upper()
+    if _font:
+        label.font = _font
+    label.font_size = 48
+    label.pixel_size = 0.006
+    label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+    label.shaded = false
+    label.outline_size = 0
+    label.no_depth_test = false
+    city_root.add_child(label)
     towers[host] = {
-        "node": node, "material": material, "row": {}, "tone": "normal",
+        "node": node, "material": material, "label": label, "row": {}, "tone": "normal",
         "height": 0.0, "target": 1.0, "side": 1.5, "born": -1000.0,
+        "arrived": -1000.0, "page": PackedStringArray(), "style": "",
     }
 
 func _sync_chips() -> void:
@@ -148,6 +232,19 @@ func _sync_chips() -> void:
             chip.mesh = box
             chip.material_override = _chip_material
             chips_root.add_child(chip)
+            _add_chip_rim(chip)
+            var chip_label := Label3D.new()
+            chip_label.text = str(source).to_upper()
+            if _font:
+                chip_label.font = _font
+            chip_label.font_size = 48
+            chip_label.pixel_size = 0.006
+            chip_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+            chip_label.shaded = false
+            chip_label.outline_size = 0
+            chip_label.position = Vector3(0, 1.2, 0)
+            chip_label.name = "label"
+            chip.add_child(chip_label)
             chips[source] = chip
         var p := GibsonLayout.chip_position(placement, source)
         chips[source].position = Vector3(p.x, 0.3, p.y)
@@ -162,11 +259,30 @@ func _make_chip_material() -> Material:
     material.albedo_color = Color(0.015, 0.012, 0.02)
     return material
 
-func _make_ground_material() -> Material:
-    var material := StandardMaterial3D.new()
-    material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-    material.albedo_color = palette["board"]
-    return material
+# A rim around the chip's top edge, and a row of pins along two edges.
+func _add_chip_rim(chip: MeshInstance3D) -> void:
+    if _rim_material == null:
+        _rim_material = StandardMaterial3D.new()
+        _rim_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    # The rim: four thin bars along the top edge (the top itself stays dark).
+    for bar in [[Vector3(2.06, 0.06, 0.08), Vector3(0, 0.3, -1.0)], [Vector3(2.06, 0.06, 0.08), Vector3(0, 0.3, 1.0)],
+            [Vector3(0.08, 0.06, 2.06), Vector3(-1.0, 0.3, 0)], [Vector3(0.08, 0.06, 2.06), Vector3(1.0, 0.3, 0)]]:
+        var rim := MeshInstance3D.new()
+        var rim_box := BoxMesh.new()
+        rim_box.size = bar[0]
+        rim.mesh = rim_box
+        rim.material_override = _rim_material
+        rim.position = bar[1]
+        chip.add_child(rim)
+    for side in [-1.0, 1.0]:
+        for i in range(6):
+            var pin := MeshInstance3D.new()
+            var pin_box := BoxMesh.new()
+            pin_box.size = Vector3(0.3, 0.12, 0.12)
+            pin.mesh = pin_box
+            pin.material_override = _rim_material
+            pin.position = Vector3(side * 1.15, -0.1, -0.85 + 0.34 * i)
+            chip.add_child(pin)
 
 func _update_board() -> void:
     var half := extent + (8.0 if _xr_active else BOARD_MARGIN)
@@ -184,10 +300,30 @@ func _process(delta: float) -> void:
         api.send_request()
 
     _animate_towers(delta)
+    _run_traffic(delta)
     _present()
+    _follow_camera()
+
+# The sky is infinitely far (it follows the camera, never turns); the board fades
+# with the camera's distance in the city's own space.
+func _follow_camera() -> void:
+    var viewer: Node3D = camera
+    if _xr_active:
+        var scene := _scene()
+        var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") if scene else null
+        if xr_camera:
+            viewer = xr_camera
+    sky.visible = not _xr_active
+    sky.global_position = viewer.global_position
+    var local := city_root.to_local(viewer.global_position)
+    _ground_material.set_shader_parameter("camera_local", local)
+
+func _style_key(t: Dictionary, fresh: bool) -> String:
+    return "%s|%s|%s" % [scheme_id, t["tone"], fresh]
 
 func _animate_towers(delta: float) -> void:
     var ease_k := 1.0 - exp(-delta / (HEIGHT_EASE_SECONDS / 4.0))
+    var open_pulse := 1.0
     for host in towers:
         var t: Dictionary = towers[host]
         t["height"] = lerpf(t["height"], t["target"], ease_k)
@@ -201,12 +337,192 @@ func _animate_towers(delta: float) -> void:
         var node: MeshInstance3D = t["node"]
         node.scale = Vector3(side, shown, side)
         node.position.y = shown / 2.0
-        var fresh: bool = age < FRESH_SECONDS
-        var glass: Color = palette["fresh"] if fresh else palette["glass"][t["tone"]]
+        var label: Label3D = t["label"]
+        label.position = Vector3(node.position.x, shown + 0.6, node.position.z)
+
         var material: ShaderMaterial = t["material"]
         material.set_shader_parameter("size", Vector3(side, shown, side))
-        material.set_shader_parameter("glass", glass)
-        material.set_shader_parameter("brightness", 1.0)
+        var fresh: bool = age < FRESH_SECONDS
+        var key := _style_key(t, fresh)
+        if key != t["style"]:
+            t["style"] = key
+            _style_tower(t, fresh)
+        # Brightness: activity (1: the Matrix feed has no ages), a slow pulse while a
+        # connection is open, and a short boost when a car arrives.
+        var row: Dictionary = t["row"]
+        var level := 0.35 + 0.65 * 1.0
+        if int(row.get("open", 0)) > 0:
+            open_pulse = 1.0 + 0.15 * sin(TAU * clock / 2.0)
+            level *= open_pulse
+        var arrived: float = clock - t["arrived"]
+        if arrived < ARRIVAL_SECONDS:
+            level *= 1.0 + 0.25 * (1.0 - arrived / ARRIVAL_SECONDS)
+        material.set_shader_parameter("brightness", level)
+
+# What a tower looks like by its tone and whether it is fresh: set only when that changes.
+func _style_tower(t: Dictionary, fresh: bool) -> void:
+    var tone: String = t["tone"]
+    var material: ShaderMaterial = t["material"]
+    var marks: bool = palette["marks"]
+    var glass: Color = palette["fresh"] if fresh else palette["glass"][tone]
+    var text: Color = palette["fresh"] if fresh else palette["text"][tone]
+    material.set_shader_parameter("glass", glass)
+    material.set_shader_parameter("text_color", text)
+    material.set_shader_parameter("stripes", marks and tone == "blocked")
+    material.set_shader_parameter("dashes", marks and tone == "untunnelled")
+    material.set_shader_parameter("windows", palette["windows"])
+    var row: Dictionary = t["row"]
+    var count := float(row.get("count", 0))
+    var fraction := float(row.get("blocked", 0)) / count if count > 0.0 else 0.0
+    var cap := 0.0
+    if fraction > 0.0 and fraction < 1.0:
+        cap = maxf(fraction, 0.5 / maxf(float(t["target"]), 1.0))
+    material.set_shader_parameter("cap_fraction", cap)
+    material.set_shader_parameter("cap_color", palette["fresh"] if marks else palette["glass"]["blocked"])
+    material.set_shader_parameter("cap_stripes", marks)
+    var label: Label3D = t["label"]
+    label.modulate = text
+
+# ---- traffic --------------------------------------------------------------------
+
+func _interval_of(row: Dictionary) -> float:
+    var count := float(row.get("count", 1))
+    return clampf(6.0 / (1.0 + log(1.0 + count)), 0.4, 6.0) * (1.0 + float(row.get("last_seen_ago", 0)) / 10.0)
+
+func _car_color(t: Dictionary, refused: bool) -> Color:
+    var traffic = palette["traffic"]
+    if refused and not palette["marks"]:
+        return palette["glass"]["blocked"]
+    if traffic != null:
+        return traffic
+    return palette["glass"][t["tone"]].lerp(Color.WHITE, 0.6)
+
+func _run_traffic(delta: float) -> void:
+    # New cars, one link per tower.
+    for host in links:
+        if not towers.has(host):
+            continue
+        var link: Dictionary = links[host]
+        link["next"] -= delta
+        if link["next"] > 0.0:
+            continue
+        var t: Dictionary = towers[host]
+        var row: Dictionary = t["row"]
+        link["next"] += _interval_of(row)
+        link["seq"] += 1
+        if cars.size() >= MAX_CARS:
+            continue   # the cap: this link's car is skipped
+        var count := int(row.get("count", 0))
+        var refused := count > 0 and int(row.get("blocked", 0)) >= count
+        var sent := float(row.get("sent", 0))
+        var received := float(row.get("received", 0))
+        var share := clampf(sent / (sent + received), 0.2, 0.8) if sent + received > 0.0 else 1.0
+        var outbound := refused or GibsonLayout.hash01(host + ":" + str(link["seq"])) < share
+        var points: PackedVector2Array = t["route"]
+        if points.size() < 2:
+            continue
+        var lengths := PackedFloat32Array()
+        var total := 0.0
+        for i in range(points.size() - 1):
+            total += points[i].distance_to(points[i + 1])
+            lengths.append(total)
+        cars.append({
+            "host": host, "points": points, "lengths": lengths, "total": total, "along": 0.0,
+            "outbound": outbound, "refused": refused, "flash": -1.0,
+            "color": _car_color(t, refused),
+        })
+
+    # Move them; draw them.
+    var multimesh := streaks.multimesh
+    var i := 0
+    while i < cars.size():
+        var car: Dictionary = cars[i]
+        if car["flash"] >= 0.0:
+            car["flash"] += delta
+            if car["flash"] >= FLASH_SECONDS:
+                cars.remove_at(i)
+                continue
+        else:
+            car["along"] += CAR_SPEED * delta
+            if car["along"] >= car["total"]:
+                car["along"] = car["total"]
+                if towers.has(car["host"]) and car["outbound"]:
+                    towers[car["host"]]["arrived"] = clock
+                if car["refused"]:
+                    car["flash"] = 0.0   # a refused car stops at the foot of the tower and flashes
+                else:
+                    cars.remove_at(i)
+                    continue
+        i += 1
+    multimesh.visible_instance_count = cars.size()
+    for n in range(cars.size()):
+        var car: Dictionary = cars[n]
+        var travelled: float = car["along"] if car["outbound"] else car["total"] - car["along"]
+        var at := _point_on(car, travelled)
+        var heading := _heading_on(car, travelled)
+        if not car["outbound"]:
+            heading = -heading
+        var yaw := atan2(-heading.x, -heading.y)   # the plane's head end is -Z
+        var basis := Basis(Vector3.UP, yaw)
+        var scale_up := 1.0
+        var color: Color = car["color"]
+        if car["flash"] >= 0.0:
+            scale_up = 1.0 + 4.0 * (1.0 - car["flash"] / FLASH_SECONDS)
+            basis = basis.scaled(Vector3(scale_up, 1.0, 0.4))
+        # The head is at the car's point: the 3 unit plane sits behind it.
+        var origin := Vector3(at.x, CAR_Y, at.y) - Vector3(heading.x, 0.0, heading.y) * 1.5
+        if car["flash"] >= 0.0:
+            origin = Vector3(at.x, CAR_Y, at.y)
+        multimesh.set_instance_transform(n, Transform3D(basis, origin))
+        multimesh.set_instance_color(n, color)
+
+func _point_on(car: Dictionary, travelled: float) -> Vector2:
+    var points: PackedVector2Array = car["points"]
+    var lengths: PackedFloat32Array = car["lengths"]
+    var start := 0.0
+    for i in range(lengths.size()):
+        if travelled <= lengths[i] or i == lengths.size() - 1:
+            var seg := lengths[i] - start
+            var k := 0.0 if seg <= 0.0 else clampf((travelled - start) / seg, 0.0, 1.0)
+            return points[i].lerp(points[i + 1], k)
+        start = lengths[i]
+    return points[points.size() - 1]
+
+func _heading_on(car: Dictionary, travelled: float) -> Vector2:
+    var points: PackedVector2Array = car["points"]
+    var lengths: PackedFloat32Array = car["lengths"]
+    for i in range(lengths.size()):
+        if travelled <= lengths[i] or i == lengths.size() - 1:
+            var d := points[i + 1] - points[i]
+            return d.normalized() if d.length() > 0.0 else Vector2(0, -1)
+    return Vector2(0, -1)
+
+# ---- schemes -------------------------------------------------------------------
+
+func _unhandled_input(event: InputEvent) -> void:
+    if Globals.embed or not (event is InputEventKey):
+        return
+    var key := event as InputEventKey
+    if key.pressed and not key.echo and key.keycode == KEY_C:
+        scheme_id = GibsonSchemes.next_id(scheme_id)
+        _apply_scheme()
+
+func _apply_scheme() -> void:
+    palette = GibsonSchemes.palette(scheme_id)
+    _ground_material.set_shader_parameter("board", palette["board"])
+    _ground_material.set_shader_parameter("trace_a", palette["trace_a"])
+    _ground_material.set_shader_parameter("trace_b", palette["trace_b"])
+    for name in ["sky_base", "sky_strand", "sky_arc", "sky_formula", "sky_wash"]:
+        _sky_material.set_shader_parameter(name, palette[name])
+    _sky_material.set_shader_parameter("board", palette["board"])
+    _sky_material.set_shader_parameter("strength", palette["sky_strength"])
+    _rim_material.albedo_color = palette["home_rim"]
+    for chip in chips.values():
+        (chip.get_node("label") as Label3D).modulate = palette["text"]["normal"]
+    for t in towers.values():
+        t["style"] = ""
+    for car in cars:
+        car["color"] = _car_color(towers[car["host"]], car["refused"]) if towers.has(car["host"]) else car["color"]
 
 # ---- presentation: a flat screen, or a model on a table in XR ------------------
 
