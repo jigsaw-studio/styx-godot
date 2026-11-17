@@ -27,6 +27,7 @@ var placement: Dictionary = GibsonLayout.new_placement()
 var hosts: Array = []
 var sizes: Dictionary = {}
 var towers: Dictionary = {}          # host -> {node, material, row, tone, height, target, side, born}
+var _chip_material := _make_chip_material()
 var chips: Dictionary = {}           # source -> MeshInstance3D
 var known = null                     # Dictionary of hosts seen; null until the first answer
 var extent: float = 24.0
@@ -145,10 +146,7 @@ func _sync_chips() -> void:
             var box := BoxMesh.new()
             box.size = Vector3(2.0, 0.6, 2.0)
             chip.mesh = box
-            var material := StandardMaterial3D.new()
-            material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-            material.albedo_color = Color(0.015, 0.012, 0.02)
-            chip.material_override = material
+            chip.material_override = _chip_material
             chips_root.add_child(chip)
             chips[source] = chip
         var p := GibsonLayout.chip_position(placement, source)
@@ -157,6 +155,12 @@ func _sync_chips() -> void:
         if not placement["home"].has(source):
             chips[source].queue_free()
             chips.erase(source)
+
+func _make_chip_material() -> Material:
+    var material := StandardMaterial3D.new()
+    material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    material.albedo_color = Color(0.015, 0.012, 0.02)
+    return material
 
 func _make_ground_material() -> Material:
     var material := StandardMaterial3D.new()
@@ -251,6 +255,11 @@ func _present_flat() -> void:
         world_env.environment.background_mode = Environment.BG_COLOR
         world_env.environment.background_color = Color.BLACK
 
+# The table-top model is 1.6 m across.
+func _model_basis() -> Basis:
+    var k := 1.6 / (2.0 * extent)
+    return Basis.from_scale(Vector3(k, k, k))
+
 func _present_xr() -> void:
     var scene := _scene()
     if camera.current:
@@ -259,8 +268,7 @@ func _present_xr() -> void:
     if floor_node:
         floor_node.visible = true
     if _xr_placed:
-        var k := 1.6 / (2.0 * extent)
-        city_root.global_transform.basis = Basis.from_scale(Vector3(k, k, k))
+        city_root.global_transform.basis = _model_basis()
     if _xr_placed or scene == null:
         return
     var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") as Node3D
@@ -271,8 +279,7 @@ func _present_xr() -> void:
     var forward := -head.basis.z
     forward.y = 0.0
     forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
-    var s := 1.6 / (2.0 * extent)
-    city_root.global_transform = Transform3D(Basis.from_scale(Vector3(s, s, s)),
+    city_root.global_transform = Transform3D(_model_basis(),
         Vector3(head.origin.x, 0.9, head.origin.z) + forward * 1.2)
     _xr_placed = true
 

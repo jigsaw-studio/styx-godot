@@ -273,13 +273,14 @@ static func tower_sizes(hosts: Array) -> Dictionary:
         if float(h["sent"]) + float(h["received"]) > 0.0:
             any_bytes = true
         cmax = maxf(cmax, float(h["count"]))
+    var values := {}
     for h in hosts:
         var v: float = (float(h["sent"]) + float(h["received"])) if any_bytes else float(h["count"])
+        values[h["host"]] = v
         vmax = maxf(vmax, v)
     var out := {}
     for h in hosts:
-        var v: float = (float(h["sent"]) + float(h["received"])) if any_bytes else float(h["count"])
-        var norm := 0.0 if vmax <= 0.0 else log(1.0 + v) / log(1.0 + vmax)
+        var norm := 0.0 if vmax <= 0.0 else log(1.0 + values[h["host"]]) / log(1.0 + vmax)
         var side := 1.2
         if cmax > 0.0:
             side += 0.8 * log(1.0 + float(h["count"])) / log(1.0 + cmax)

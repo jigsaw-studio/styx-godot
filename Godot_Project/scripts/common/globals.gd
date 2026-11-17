@@ -39,7 +39,6 @@ var shot: String = ""
 var shot_after: float = 6.0
 
 const VIZ_IDS := ["matrix", "gibson"]
-const SCHEME_IDS := ["state", "green", "cyan", "red", "night"]
 
 func _init() -> void:
     _read_settings()
@@ -86,7 +85,7 @@ func _read_settings() -> void:
         viz = wanted_viz
 
     var wanted_scheme: String = args.get("scheme", "")
-    if SCHEME_IDS.has(wanted_scheme):
+    if GibsonSchemes.IDS.has(wanted_scheme):
         scheme = wanted_scheme
 
     # A path the process may write: native only, absolute, a .png.
