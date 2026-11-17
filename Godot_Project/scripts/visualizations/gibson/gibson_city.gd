@@ -89,7 +89,7 @@ func _on_data(_endpoint: String, data: Array) -> void:
     GibsonLayout.place(placement, hosts, [HOME])
     sizes = GibsonLayout.tower_sizes(hosts)
 
-    var first := known == null
+    var first: bool = known == null
     if first:
         known = {}
 
@@ -117,6 +117,7 @@ func _on_data(_endpoint: String, data: Array) -> void:
         if not present.has(host):
             towers[host]["node"].queue_free()
             towers.erase(host)
+            known.erase(host)
 
     extent = GibsonLayout.extent_of(placement)
     camera.extent = extent
@@ -200,7 +201,7 @@ func _animate_towers(delta: float) -> void:
         var glass: Color = palette["fresh"] if fresh else palette["glass"][t["tone"]]
         var material: ShaderMaterial = t["material"]
         material.set_shader_parameter("size", Vector3(side, shown, side))
-        material.set_shader_parameter("glass", Vector3(glass.r, glass.g, glass.b))
+        material.set_shader_parameter("glass", glass)
         material.set_shader_parameter("brightness", 1.0)
 
 # ---- presentation: a flat screen, or a model on a table in XR ------------------
@@ -254,9 +255,12 @@ func _present_xr() -> void:
     var scene := _scene()
     if camera.current:
         camera.current = false
-    var floor_node := scene.get_node_or_null("stage/Floor") if scene else null
+    var floor_node: Node = scene.get_node_or_null("stage/Floor") if scene else null
     if floor_node:
         floor_node.visible = true
+    if _xr_placed:
+        var k := 1.6 / (2.0 * extent)
+        city_root.global_transform.basis = Basis.from_scale(Vector3(k, k, k))
     if _xr_placed or scene == null:
         return
     var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") as Node3D
@@ -289,6 +293,9 @@ func _take_shot() -> void:
     await get_tree().create_timer(Globals.shot_after).timeout
     await RenderingServer.frame_post_draw
     var image := get_viewport().get_texture().get_image()
-    image.save_png(Globals.shot)
-    print("gibson: saved ", Globals.shot)
+    if image == null:
+        print("gibson: no image to save (headless?)")
+    else:
+        image.save_png(Globals.shot)
+        print("gibson: saved ", Globals.shot)
     get_tree().quit()

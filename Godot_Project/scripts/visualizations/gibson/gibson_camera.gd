@@ -11,7 +11,8 @@ const LOOK_DEGREES_PER_PIXEL := 0.25
 const FLOOR_Y := 0.8
 const PITCH_LIMIT := 85.0
 
-var extent: float = 24.0
+var extent: float = 24.0             # the city's, set by the owner
+var _extent: float = 24.0            # what the tour and limits use: eased, so a growing city is no cut
 var tour_time: float = 0.0
 var idle: float = IDLE_RETURN       # seconds since the last input; starts in the tour
 var blend: float = 1.0               # 1: the tour; 0: the user's own view
@@ -63,7 +64,7 @@ static func tour_pose(t_raw: float, e: float) -> Transform3D:
     var pos: Vector3
     var target: Vector3
     var overhead_target := Vector3.ZERO
-    var street_target := Vector3(street_x, 6.0, -e)
+    var street_target := Vector3(street_x, 6.0, z0 - 30.0)
     if t < 12.0:
         # Overhead, a quarter turn around the city.
         pos = _orbit(_ease(t / 12.0) * PI * 0.5, e)
@@ -88,14 +89,14 @@ static func tour_pose(t_raw: float, e: float) -> Transform3D:
     return Transform3D(_look(pos, target), pos)
 
 func _apply_tour() -> void:
-    var pose := tour_pose(tour_time, extent)
+    var pose := tour_pose(tour_time, _extent)
     _tour_position = pose.origin
     global_transform = pose
 
 # ---- flying ---------------------------------------------------------------
 
 func overhead() -> Transform3D:
-    return tour_pose(0.0, extent)
+    return tour_pose(0.0, _extent)
 
 func _take_control() -> void:
     if blend > 0.0:
@@ -137,7 +138,7 @@ func _move(delta_position: Vector3) -> void:
     var p := _fly_origin + delta_position
     p.y = maxf(p.y, FLOOR_Y)
     var flat := Vector2(p.x, p.z)
-    var limit := extent + 80.0
+    var limit := _extent + 80.0
     if flat.length() > limit:
         flat = flat.normalized() * limit
         p.x = flat.x
@@ -146,6 +147,9 @@ func _move(delta_position: Vector3) -> void:
 
 func _process(delta: float) -> void:
     tour_time += delta
+    _extent = lerpf(_extent, extent, 1.0 - exp(-delta / 0.5))
+    if _dragging and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+        _dragging = false
     var moved := false
     var move := Vector3.ZERO
     var look := Vector2.ZERO
@@ -169,8 +173,8 @@ func _process(delta: float) -> void:
             _set_pose(pose.origin, rot.y, rot.x)
             moved = true
 
-    var pad := get_tree().current_scene.get_node_or_null("ui/joystick_touch_pad") if get_tree().current_scene else null
-    if pad and pad.visible and pad.has_method("get_joystick"):
+    var pad: Node = get_tree().current_scene.get_node_or_null("ui/joystick_touch_pad") if get_tree().current_scene else null
+    if pad and pad is CanvasItem and (pad as CanvasItem).is_visible_in_tree() and pad.has_method("get_joystick"):
         var stick: Vector2 = pad.get_joystick()
         move += global_transform.basis.x * stick.x + (-global_transform.basis.z) * -stick.y
         var swipe: Vector2 = pad.get_touchpad_delta()
@@ -197,7 +201,7 @@ func _process(delta: float) -> void:
         _apply_tour()
     elif idle >= IDLE_RETURN:
         blend = minf(1.0, blend + delta / BLEND_SECONDS)
-        var pose := tour_pose(tour_time, extent)
+        var pose := tour_pose(tour_time, _extent)
         var k := _ease(blend)
         var mine := Quaternion(Basis.from_euler(Vector3(_pitch, _yaw, 0.0), EULER_ORDER_YXZ))
         var target := Quaternion(pose.basis)
