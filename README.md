@@ -82,8 +82,12 @@ Point the app at it, on the command line (arguments go after `--`) or, for the w
 | `--api=http://host:8880/api/styx` | `?api=/api/styx` | Base URL of the feed (`http(s)://` only; on the web only a path such as `/api/styx`, on the page's own origin). Also read from the `STYX_API_URL` environment variable. Unset: the Pi, as before |
 | `--session=<id>` | `&session=<id>` | One Layman session (`A-Z a-z 0-9 _ -`, up to 128 characters) |
 | `--relative=15m` | `&relative=15m` | How far back to look (`60s`, `15m`, `1h`, `1d`) |
-| `--poll=2` | `&poll=2` | Every N seconds (1 to 60) also ask for destinations not yet shown and add them at once. Off by default |
-| | `&embed=1` | Matrix only, on black, fixed camera, no controls: for an iframe |
+| `--poll=2` | `&poll=2` | Every N seconds (1 to 60) also ask for destinations not yet shown and add them at once (the Matrix; off by default). Gibson asks for the whole city again every N seconds, or every 30 when this is not set |
+| | `&embed=1` | On black, no interface, no keys: for an iframe. The Matrix has a fixed camera; Gibson tours by itself, and dragging and the wheel still move it |
+| `--viz=gibson` | `&viz=gibson` | Show the Gibson city instead of the Matrix (default `matrix`) |
+| `--scheme=state` | `&scheme=state` | Gibson's colours: `state` (default), `green`, `cyan`, `red`, `night` |
+| `--shot=/abs/path.png` | | Native only: save one frame to this PNG and quit (check a picture without a person) |
+| `--shot-after=6` | | Seconds before `--shot` is taken (1 to 120) |
 
 Values that do not match are ignored. For the Layman tab, export with the **Web (Layman)** preset (no third-party scripts, no threads, so it works in an iframe):
 ```
@@ -91,11 +95,28 @@ Godot --path Godot_Project --headless --export-release "Web (Layman)" build/laym
 ```
 ![The Matrix embedded](docs/images/styx-layman-embed.png)
 
+### Gibson
+A second view, after the "city of text" sequences of a 1995 film: a city of translucent towers on a circuit-board ground, under a slow sky of filaments and formulas.
+
+- **Towers**: one per remote host. The more data, the taller; the more connections, the wider. Rows of real text (host, ports, counts, bytes) cover the faces and turn into bars from far away. A tower is green when normal, red when every connection was refused (a partly refused one has a red cap), amber when outside the tunnel, cyan when local; one that appears now rises, pale, for a few seconds.
+- **Blocks**: hosts of one registrable domain stand together on a block of up to 16 lots, and a tower keeps its lot as the data changes. The busiest domains are nearest the centre. The local side is the low chip at the centre with the magenta rim (amber in Night).
+- **Streaks**: light racing along the streets between the home chip and a tower. In this version they are drawn from the same feed as the Matrix (`/api/v1/matrix`), so there is one home chip and every host is equally recent; real links, selection and the menu come with the Gibson API.
+
+```
+Godot --path Godot_Project -- --viz=gibson --api=http://localhost:8880/api/styx
+```
+or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, red and night show state as marks: stripes for refused, dashes for outside the tunnel). The camera tours the city by itself; any input takes over: `W A S D` fly along the view, the arrows turn and tilt it, `Page Up` / `Page Down` go up and down, `Space` held is three times faster, `Home` returns overhead, dragging with the left button looks, the wheel moves along the view, and the on-screen stick and pad work on touch. In XR the city is a table-top model. The visionOS build keeps the bar charts. At most 160 towers are drawn.
+
+![Gibson](docs/images/styx-gibson.png)
+
+`window.styxViews` on the web page lists the views a build has (`['matrix', 'gibson']`), which Layman reads.
+
 ### iOS and iPadOS
 - Reference: Godot [Exporting for iOS](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_ios.html) guide
 - In most cases the default settings for exporting to iOS should be sufficient
 
 ## Credits
+- Gibson's labels use [Michroma](https://fonts.google.com/specimen/Michroma) by Vernon Adams, under the SIL Open Font Licence ([`assets/fonts/OFL.txt`](Godot_Project/assets/fonts/OFL.txt))
 - Godot XR Tools: [Website](https://godotvr.github.io/godot-xr-tools/), [GitHub](https://github.com/GodotVR/godot-xr-tools) (special thanks [Bastiaan Olij](https://github.com/BastiaanOlij))
 - [GodotVision](https://godot.vision/) (special thanks [Kevin Watters](https://github.com/kevinw))
 - [Pocket Godot](https://github.com/lukky-nl/Pocket-Godot) (special thanks [@lukky-nl](https://github.com/lukky-nl))
