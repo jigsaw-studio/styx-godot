@@ -22,6 +22,9 @@ class_name MatrixDomainWindow
 #   distribution should be reset.
 
 var styx_api: StyxApi
+var peek_api: StyxApi  # light refresh that only adds new destinations
+var peek_timer: float = 0.0
+var fading: bool = false
 
 # Configuration
 var UPDATE_INTERVAL: float = 30.0  # Time in seconds between API updates
@@ -72,6 +75,7 @@ func _ready() -> void:
     initialize_columns()
     
     # Initialize API
+    API_PARAMS = "?relative=" + (Globals.api_relative if Globals.api_relative != "" else "60s")
     styx_api = StyxApi.new()
     styx_api.init(API_ENDPOINT + API_PARAMS)
     styx_api.connect("data_received", Callable(self, "_on_data_received"))
@@ -79,6 +83,15 @@ func _ready() -> void:
     
     # Initial API request
     styx_api.send_request()
+
+    # The light refresh (off unless Globals.api_poll_seconds is set). No request
+    # now: the main one just went.
+    if Globals.api_poll_seconds > 0.0:
+        peek_api = StyxApi.new()
+        peek_api.request_on_ready = false
+        peek_api.init(API_ENDPOINT + API_PARAMS)
+        peek_api.connect("data_received", Callable(self, "_on_peek_received"))
+        add_child(peek_api)
 
 func initialize_columns() -> void:
     available_columns = []
@@ -99,7 +112,14 @@ func initialize_columns() -> void:
 
 func _process(delta: float) -> void:
     update_timer += delta
-    
+
+    if peek_api:
+        peek_timer += delta
+        if peek_timer >= Globals.api_poll_seconds:
+            peek_timer = 0.0
+            if not fading:
+                peek_api.send_request()
+
     if current_batch < NUM_BATCHES:
         batch_timer += delta
         if batch_timer >= BATCH_DELAY:
@@ -132,6 +152,7 @@ func _process(delta: float) -> void:
             column_cooldown.erase(col)
 
 func fade_out_all_domains() -> void:
+    fading = true
     var domains = active_domains.keys().duplicate()
     if domains.is_empty():
         _on_all_domains_faded()
@@ -156,8 +177,14 @@ func fade_out_all_domains() -> void:
                 if tracker.remaining == 0:
                     _on_all_domains_faded()
             )
+        else:
+            _remove_domain(domain)
+            tracker.remaining -= 1
+            if tracker.remaining == 0:
+                _on_all_domains_faded()
 
 func _on_all_domains_faded() -> void:
+    fading = false
     # Clear all existing domains and reset state
     active_domains.clear()
     domain_counts.clear()
@@ -215,6 +242,34 @@ func _on_data_received(_endpoint: String, data: Array) -> void:
     
     prepare_batches()
 
+# Adds destinations not yet on screen, at once; never removes or changes anything.
+func _on_peek_received(_endpoint: String, data: Array) -> void:
+    if fading:
+        return
+    for entry in data:
+        if not (entry is Dictionary and entry.has("address") and entry.has("count")):
+            continue
+        var address = entry.address
+        if domain_counts.has(address) or active_domains.has(address):
+            continue
+        domain_counts[address] = entry.count
+        var column := -1
+        var batch := -1
+        # Nearest earlier batch first, then later ones.
+        var order := range(mini(current_batch, NUM_BATCHES) - 1, -1, -1)
+        order.append_array(range(current_batch, NUM_BATCHES))
+        for b in order:
+            column = get_available_column_for_batch(b, address)
+            if column != -1:
+                batch = b
+                break
+        if column == -1:
+            continue  # the next full cycle places it
+        while pending_batches.size() <= batch:
+            pending_batches.append([])
+        pending_batches[batch].append({"domain": address, "speed": max_rain_speed})
+        create_single_domain(address, max_rain_speed, column)
+
 func prepare_batches() -> void:
     var domain_speeds = calculate_frequencies(domain_counts)
     
@@ -227,7 +282,7 @@ func prepare_batches() -> void:
     for domain in sorted_domains:
         all_domains.append({
             "domain": domain,
-            "speed": domain_speeds[domain]
+            "speed": domain_speeds.get(domain, min_rain_speed)
         })
     
     # Distribute domains across batches
@@ -250,6 +305,8 @@ func display_next_batch() -> void:
     var batch_domains = pending_batches[current_batch]
     
     for domain_data in batch_domains:
+        if active_domains.has(domain_data.domain):
+            continue  # already placed by the light refresh
         var column = get_available_column_for_batch(current_batch, domain_data.domain)
         if column != -1:
             create_single_domain(domain_data.domain, domain_data.speed, column)
@@ -291,6 +348,8 @@ func create_single_domain(domain: String, speed: float, column: int) -> void:
     }
 
 func calculate_frequencies(counts: Dictionary) -> Dictionary:
+    if counts.is_empty():
+        return {}
     var max_count = counts.values().max()
     if max_count == 0:
         return {}

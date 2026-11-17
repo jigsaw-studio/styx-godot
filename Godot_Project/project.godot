@@ -33,6 +33,10 @@ window/handheld/orientation=4
 
 enabled=PackedStringArray("res://addons/godot-xr-tools/plugin.cfg", "res://addons/godot_vision/plugin.cfg")
 
+[filesystem]
+
+import/blender/enabled=false
+
 [input]
 
 move_right={
