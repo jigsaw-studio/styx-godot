@@ -131,6 +131,37 @@ func _init() -> void:
     var tp: Vector2 = L.tower_position(p, "a.github.com")
     check(is_equal_approx(tp.x, 16.0 + (0 - 1.5) * 3.0) and is_equal_approx(tp.y, (0 - 1.5) * 3.0), "tower position of slot 1 lot 0")
 
+    # Links and sources.
+    var link_rows := [
+        {"source": "llm-auth", "target": "a.org", "count": 2}, {"source": "harness", "target": "a.org", "count": 5},
+        {"source": "harness", "target": "gone.org", "count": 1}, {"source": "harness", "target": "b.org", "count": 1},
+    ]
+    var kept: Array = L.links_for(link_rows, [row("a.org"), row("b.org")])
+    check(kept.size() == 3 and kept[0]["source"] == "llm-auth", "links to hosts without towers are dropped")
+    check(L.sources_of(kept, "LOCAL") == ["harness", "llm-auth"], "sources, ascending, distinct")
+    check(L.sources_of([], "LOCAL") == ["LOCAL"], "no links: the fallback source")
+    var s17 := L.new_placement()
+    var seventeen := []
+    for i in range(17):
+        seventeen.append("src%02d" % i)
+    L.place(s17, [], seventeen)
+    check(s17["home"]["src15"] == 15 and s17["home"]["src16"] == 15, "a 17th source shares lot 15")
+    var s2 := L.new_placement()
+    L.place(s2, [], ["harness", "llm-auth"])
+    L.place(s2, [], ["harness", "llm-auth", "aaa"])
+    check(s2["home"]["harness"] == 0 and s2["home"]["llm-auth"] == 1 and s2["home"]["aaa"] == 2, "sources keep their lots when another arrives")
+    var from_hosts: Array = L.links_from_hosts([row("a.org", 4, 10, 20)], "LOCAL")
+    check(from_hosts.size() == 1 and from_hosts[0]["source"] == "LOCAL" and from_hosts[0]["target"] == "a.org" and from_hosts[0]["count"] == 4, "one link per host from LOCAL")
+    var busy := row("a.org")
+    var quiet := row("b.org")
+    quiet["last_seen_ago"] = 30
+    var older := row("c.org")
+    older["last_seen_ago"] = 600
+    check(is_equal_approx(L.brightness_of(busy), 1.0) and is_equal_approx(L.brightness_of(quiet), 0.35) and L.brightness_of(older) == L.brightness_of(quiet), "brightness runs 0.35 to 1.0")
+    check(L.car_interval({"count": 1, "last_seen_ago": 61, "open": 0}) < 0.0, "a link quiet over a minute sends none")
+    check(L.car_interval({"count": 1, "last_seen_ago": 61, "open": 1}) > 0.0, "unless a connection is open")
+    check(is_equal_approx(L.car_interval({"count": 0, "last_seen_ago": 0}), 6.0), "interval of an unseen link is 6 s")
+
     # Sizes.
     var sized := L.tower_sizes([row("a.org", 100, 1000, 9000), row("b.org", 1, 10, 0), row("c.org", 3, 0, 0)])
     for h in sized.values():
@@ -176,6 +207,77 @@ func _init() -> void:
     check(page.has("REFUSED 3") and page.has("OPEN 1") and page.has("UP 5.1K") and page.has("VIA PROXY") and page.has("TOOL WEB_FETCH") and page.has("FROM HARNESS") and page.has("SCOPE TUNNELLED"), "page holds the lines")
     var plain: PackedStringArray = L.page_of(row("b.org", 2))
     check(not plain.has("OPEN 0") and not "REFUSED 0" in plain and plain[plain.size() - 1] == "", "page leaves out what is absent")
+
+    # Picking.
+    var two := [
+        {"min": Vector3(-1, 0, 4), "max": Vector3(1, 10, 6)},
+        {"min": Vector3(-1, 0, 8), "max": Vector3(1, 10, 10)},
+    ]
+    check(L.pick_box(Vector3(0, 5, 0), Vector3(0, 0, 1), two) == 0, "pick_box: the nearer of two in line")
+    check(L.pick_box(Vector3(0, 5, 20), Vector3(0, 0, -1), two) == 1, "pick_box: from the other side, the other is nearer")
+    check(L.pick_box(Vector3(3, 5, 0), Vector3(0, 0, 1), two) == -1, "pick_box: a miss beside")
+    check(L.pick_box(Vector3(0, 30, 5), Vector3(0, -1, 0), two) == 0, "pick_box: a hit from above")
+    check(L.pick_box(Vector3(0, 5, 0), Vector3(0, 0, -1), two) == -1, "pick_box: boxes behind the ray are not hit")
+    check(L.pick_rect(Vector3(0.5, 0.5, 3), Vector3(0, 0, -1), [Rect2(-1, -1, 1, 1), Rect2(0, 0, 1, 1)]) == 1, "pick_rect: the rectangle crossed")
+    check(L.pick_rect(Vector3(5, 5, 3), Vector3(0, 0, -1), [Rect2(0, 0, 1, 1)]) == -1, "pick_rect: a miss")
+    check(L.pick_rect(Vector3(0.5, 0.5, 3), Vector3(0, 0, 1), [Rect2(0, 0, 1, 1)]) == -1, "pick_rect: behind the ray")
+    check(L.face_normal(Vector2(20, 3), Vector2(0, 0)) == Vector2(1, 0) and L.face_normal(Vector2(1, -9), Vector2(0, 0)) == Vector2(0, -1), "face_normal: the axis the viewer is further along")
+    var fp: Dictionary = L.fly_pose(Vector2(10, 10), 2.0, 30.0, Vector2(10, 100))
+    check(fp["eye"] == Vector3(10, 10, 20) and fp["target"] == Vector3(10, 10, 10), "fly_pose: 9 out from the face, at min(0.6 h, 10)")
+    check(L.fly_pose(Vector2.ZERO, 2.0, 5.0, Vector2(-50, 0))["eye"].y == 3.0, "fly_pose: a short tower is looked at at 0.6 of its height")
+    check(L.valid_host("api.github.com") and L.valid_host("[fe80::1]") and L.valid_host("10.0.0.1:80"), "valid_host: names and literals")
+    check(not L.valid_host("a b") and not L.valid_host("a?b=1") and not L.valid_host("") and not L.valid_host("A.org") and not L.valid_host("x".repeat(256)), "valid_host: refuses what does not belong in a URL")
+
+    # The log and the menu.
+    var rows := [
+        {"host": "a.org", "time": 100000, "ago": 30, "source": "harness", "via": "proxy", "port": 443, "sent": 100, "received": 2048, "state": "finished", "blocked": false, "rule": null, "method": "GET", "url": "https://a.org/path/0", "label": null},
+        {"host": "a.org", "time": 100030, "ago": 0, "source": "harness", "via": "proxy", "port": 443, "sent": 0, "received": 0, "state": "active", "blocked": false, "rule": null, "method": null, "url": null, "label": "search"},
+        {"host": "a.org", "time": 100010, "ago": 20, "source": "172.16.0.2", "via": "", "port": 80, "sent": 1, "received": 1, "state": "guard", "blocked": true, "rule": "builtin:ssrf-guard", "method": "GET", "url": "https://a.org/x", "label": null},
+        {"host": "b.org", "time": 100000, "ago": 5, "port": 443, "state": "finished"},
+        {"host": "a.org", "time": 100005, "ago": 25, "source": "harness", "via": "", "port": null, "sent": 0, "received": 0, "state": "closed", "blocked": false},
+    ]
+    check(L.log_of("a.org", rows).size() == 4, "log_of keeps one host's rows")
+    var menu: Array = L.menu_of(L.log_of("a.org", rows))
+    check(menu.size() == 3 and menu[0]["label"] == "443 PROXY" and menu[0]["rows"].size() == 2, "menu: busiest group first")
+    check(menu[0]["rows"][0]["ago"] == 0, "menu: rows newest first")
+    check(menu[1]["label"] == "- HARNESS" and menu[2]["label"] == "80 172.16.0.2", "menu: ties by label")
+    var labels := []
+    for g in menu:
+        labels.append(g["label"])
+    check(labels.has("80 172.16.0.2") and labels.has("- HARNESS"), "menu: the source stands in for an empty via, a missing port is -: %s" % [labels])
+    var big_log := []
+    for i in range(30):
+        big_log.append({"host": "a.org", "ago": i, "via": "v%02d" % i, "port": 443})
+    check(L.menu_of(big_log).size() == 12, "menu: at most 12 items")
+    check(L.menu_of([]).is_empty(), "menu: an empty log, no items")
+    var box: Dictionary = L.box_of(rows[0])
+    check(box["title"] == "GET /PATH/0" and box["caption"] == "OK 100B 2.0K" and not box["blocked"], "box: method and path, state and bytes: %s" % [box])
+    check(L.box_of(rows[1])["title"] == "SEARCH" and L.box_of(rows[1])["caption"].begins_with("LIVE"), "box: the label when there is no url")
+    var refused: Dictionary = L.box_of(rows[2])
+    check(refused["blocked"] and refused["caption"] == "REFUSED BUILTIN:SSRF-GUARD", "box: a refused row: %s" % [refused])
+    check(L.box_of(rows[4], 3600)["title"] == "04:46:45", "box: the time when there is nothing else: %s" % [L.box_of(rows[4], 3600)])
+    check(L.box_of({"url": "https://a.org/" + "p".repeat(40), "method": "GET"})["title"].length() == 22, "box: titles are cut to 22")
+    check(L.path_of("https://h.org") == "/" and L.path_of("h.org/a?b=1") == "/a?b=1", "path_of")
+    var lines: PackedStringArray = L.log_lines(L.log_of("a.org", rows), 0)
+    check(lines == PackedStringArray(["03:47:10 443 LIVE", "03:46:50 80 REFUSED", "03:46:45 - CLOSED", "03:46:40 443 OK"]), "log lines, newest first: %s" % [lines])
+    var long_log := []
+    for i in range(100):
+        long_log.append({"host": "a.org", "time": 1000 + i, "ago": i, "port": 443, "state": "finished"})
+    check(L.log_lines(long_log, 0).size() == 40, "at most 40 log lines")
+    var with_log: PackedStringArray = L.page_of(row("a.org", 2), L.log_lines(long_log, 0))
+    check(with_log.size() <= GibsonFont.MAX_PAGE_ROWS and with_log[with_log.size() - 1] == "", "a page with a log fits the page texture")
+    var seen_at := with_log.find("SEEN 0S AGO")
+    check(seen_at > 0 and with_log[seen_at + 1].contains(":"), "the log follows SEEN")
+    check(L.totals_of({"count": 14, "sent": 5217, "received": 90329, "blocked": 3, "untunnelled": true}) == "14 CONNECTIONS · 5.1K UP · 88.2K DOWN · 3 REFUSED · OUTSIDE THE TUNNEL", "totals line")
+
+    # XR scale.
+    var table: float = L.table_scale(40.0)
+    check(is_equal_approx(table, 1.6 / 80.0), "table scale: 1.6 m across")
+    check(L.scale_step(table, 0.0, 0.1, table) == table and L.scale_step(0.5, 0.1, 0.1, table) == 0.5, "scale_step: the dead zone changes nothing")
+    check(is_equal_approx(L.scale_step(0.1, 1.0, 0.5, table), 0.1 * 1.4), "scale_step: up multiplies by 1 + 0.8 * value * delta")
+    check(L.scale_step(0.9, 1.0, 1.0, table) == 1.0 and L.scale_step(table, -1.0, 0.5, table) == table, "scale_step: kept between table-top and life size")
+    check(L.zoom_k(table, table) == 0.0 and L.zoom_k(1.0, table) == 1.0 and is_equal_approx(L.zoom_k((1.0 + table) / 2.0, table), 0.5), "zoom_k: 0 to 1")
+    check(L.life_origin(Vector3(2, 1.7, -3)) == Vector3(2, 0.02, -3), "life_origin: under the viewer, 2 cm up")
 
     # Hash.
     var hv := L.hash01("x")

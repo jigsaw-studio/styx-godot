@@ -5,6 +5,11 @@ class_name StyxApi
 # The signal "data_received" is declared but never explicitly used in the class
 @warning_ignore("unused_signal")
 signal data_received(endpoint: String, data: Array)
+# An answer did not come or was not an array (never emitted for an empty array).
+@warning_ignore("unused_signal")
+signal request_failed(endpoint: String)
+
+const UDP_ANSWER_SECONDS := 5.0
 
 # Network client setup (UDP for native clients, TCP HTTPRequest for WebXR web export)
 var http_client: HTTPRequest = HTTPRequest.new()
@@ -15,6 +20,7 @@ var packet_fragments := {}
 var api_endpoint: String = ""
 var request_on_ready: bool = true  # false: the owner sends when it wants
 var request_in_flight: bool = false  # HTTP only: a send while set is dropped, not queued
+var _udp_waiting: float = -1.0  # UDP only: seconds since send_request(), -1 when nothing is awaited
 
 # True when requests go over HTTP(S): always on web, and natively when
 # Globals.api_base_url is set (a Layman instance rather than the Pi).
@@ -35,6 +41,20 @@ func init(api_path: String) -> void:
     if is_initialized:
         return
     is_initialized = true
+    api_endpoint = api_path
+
+# Give up on the request in flight: its answer is never emitted, and a UDP fragment of
+# it that arrives late cannot join the next answer.
+func cancel() -> void:
+    if _uses_http() and request_in_flight:
+        http_client.cancel_request()
+    request_in_flight = false
+    _udp_waiting = -1.0
+    packet_fragments.clear()
+
+# Ask for another path from now on (a selected tower's log); what was asked before is dropped.
+func set_endpoint(api_path: String) -> void:
+    cancel()
     api_endpoint = api_path
 
 func _ready():
@@ -64,9 +84,11 @@ func send_request() -> void:
         var packet: PackedByteArray = json_str.to_utf8_buffer()
         var sent: int = udp_client.put_packet(packet)
         if sent == OK:
+            _udp_waiting = 0.0
             print("Sent via UDP: ", json_str)
         else:
             print("Failed to send request via UDP")
+            request_failed.emit(api_endpoint)
     else:
         if request_in_flight:
             print("Dropping HTTP request, one is still in flight")
@@ -76,12 +98,19 @@ func send_request() -> void:
         var error = http_client.request(url, [], HTTPClient.METHOD_GET)
         if error != OK:
             print("Failed to initiate HTTP request. Error: ", error)
+            request_failed.emit(api_endpoint)
         else:
             request_in_flight = true
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
     if not _uses_http():
         receive_udp_response()
+        if _udp_waiting >= 0.0:
+            _udp_waiting += delta
+            if _udp_waiting >= UDP_ANSWER_SECONDS:
+                # No complete answer: drop the fragments so a late one of this answer cannot join the next.
+                cancel()
+                request_failed.emit(api_endpoint)
 
 func receive_udp_response() -> void:
     while udp_client.get_available_packet_count():
@@ -119,6 +148,7 @@ func process_response_udp(response: String) -> void:
             complete_response += packet_fragments[i]
 
         # All fragments received, process the response
+        _udp_waiting = -1.0
         process_data(complete_response)
 
         # Clear stored fragments for the next message
@@ -131,6 +161,7 @@ func _process_response_http(_result, response_code: int, _headers, body: PackedB
         process_data(response)
     else:
         print("HTTP request failed with response code: ", response_code)
+        request_failed.emit(api_endpoint)
 
 # Process the data returned by the call to the API
 func process_data(body: String) -> void:
@@ -145,5 +176,7 @@ func process_data(body: String) -> void:
             emit_signal("data_received", api_endpoint, parsed_data)
         else:
             print("Unexpected JSON response, keeping the last data")
+            request_failed.emit(api_endpoint)
     else:
         print("Failed to parse JSON: ", body)
+        request_failed.emit(api_endpoint)

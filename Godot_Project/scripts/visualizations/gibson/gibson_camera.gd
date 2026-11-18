@@ -21,6 +21,9 @@ var _yaw: float = 0.0
 var _pitch: float = 0.0
 var _dragging: bool = false
 var _tour_position: Vector3 = Vector3.ZERO
+# While a tower is selected the tour does not resume, and the arrow keys belong to the menu.
+var holding: bool = false
+var _flight: Dictionary = {}         # {from_pos, from_yaw, from_pitch, to_pos, to_yaw, to_pitch, t, seconds}
 
 func _init() -> void:
     far = 1000.0
@@ -98,7 +101,28 @@ func _apply_tour() -> void:
 func overhead() -> Transform3D:
     return tour_pose(0.0, _extent)
 
+# Fly to a pose over `seconds`; any input of the user's ends it where it is.
+func fly_to(eye: Vector3, target: Vector3, seconds: float) -> void:
+    _take_control()
+    var basis := _look(eye, target)
+    var rot := basis.get_euler(EULER_ORDER_YXZ)
+    _flight = {
+        "from_pos": _fly_origin, "from_yaw": _yaw, "from_pitch": _pitch,
+        "to_pos": eye, "to_yaw": rot.y, "to_pitch": rot.x, "t": 0.0, "seconds": maxf(seconds, 0.01),
+    }
+
+func _step_flight(delta: float) -> void:
+    _flight["t"] += delta
+    var k := _ease(_flight["t"] / _flight["seconds"])
+    _set_pose(_flight["from_pos"].lerp(_flight["to_pos"], k),
+        lerp_angle(_flight["from_yaw"], _flight["to_yaw"], k),
+        lerpf(_flight["from_pitch"], _flight["to_pitch"], k))
+    idle = 0.0
+    if _flight["t"] >= _flight["seconds"]:
+        _flight = {}
+
 func _take_control() -> void:
+    _flight = {}
     if blend > 0.0:
         # Whatever is on screen now is where flying starts.
         var rot := global_transform.basis.get_euler(EULER_ORDER_YXZ)
@@ -164,8 +188,9 @@ func _process(delta: float) -> void:
         if Input.is_action_pressed("page_down"): move += Vector3.DOWN
         if Input.is_action_pressed("camera_left"): look.x += 1.0
         if Input.is_action_pressed("camera_right"): look.x -= 1.0
-        if Input.is_action_pressed("camera_up"): look.y += 1.0
-        if Input.is_action_pressed("camera_down"): look.y -= 1.0
+        if not holding:
+            if Input.is_action_pressed("camera_up"): look.y += 1.0
+            if Input.is_action_pressed("camera_down"): look.y -= 1.0
         if Input.is_action_just_pressed("home"):
             var pose := overhead()
             _take_control()
@@ -194,6 +219,12 @@ func _process(delta: float) -> void:
         idle = 0.0
 
     if moved:
+        return
+    if not _flight.is_empty():
+        _step_flight(delta)
+        return
+    if holding:
+        idle = 0.0   # a selected tower keeps the view: the tour does not resume
         return
 
     idle += delta

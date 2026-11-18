@@ -9,6 +9,8 @@ uniform vec3 text_color : source_color = vec3(0.6, 1.0, 0.8);
 uniform vec3 cap_color : source_color = vec3(1.0, 0.2, 0.2);
 uniform float cap_fraction = 0.0;
 uniform float brightness = 1.0;
+uniform bool selected = false;                   // drawn in the highlight colour, edges at full strength
+uniform vec3 highlight : source_color = vec3(0.5, 0.4, 1.0);
 uniform bool stripes = false;                    // film schemes: refused
 uniform bool cap_stripes = false;                // film schemes: a partly refused cap
 uniform bool dashes = false;                     // film schemes: outside the tunnel
@@ -65,8 +67,8 @@ void fragment() {
     }
 
     bool in_cap = cap_fraction > 0.0 && (flat_face ? lp.y > 0.0 : d < cap_fraction * size.y);
-    vec3 glass_here = in_cap ? cap_color : glass;
-    vec3 text_here = in_cap ? cap_color : text_color;
+    vec3 glass_here = selected ? highlight : (in_cap ? cap_color : glass);
+    vec3 text_here = selected ? highlight : (in_cap ? cap_color : text_color);
 
     float stripe = 0.25 * step(fract((u * size.x + d) / 0.6), 0.5);
     float fill = 0.10;
@@ -108,5 +110,6 @@ void fragment() {
         fill += 0.25 * step(fract((lp.x + lp.z) * size.x / 0.6), 0.5);
     }
 
-    ALBEDO = (glass_here * (fill + edge) + text_here * coverage) * brightness;
+    float level = selected ? 1.0 : brightness;
+    ALBEDO = (glass_here * (fill + edge * (selected ? 1.5 : 1.0)) + text_here * coverage) * level;
 }
