@@ -34,7 +34,6 @@ var api: StyxApi                     # the Matrix feed; only made in the fallbac
 var hosts_api: StyxApi
 var links_api: StyxApi
 var mode: String = "pending"         # "pending" (first answer not in), "new" (hosts and links), "matrix"
-var host_rows: Array = []            # the last /v1/hosts answer, cut
 var link_rows: Array = []            # the last /v1/links answer
 var sky: MeshInstance3D
 var streaks: MultiMeshInstance3D
@@ -181,7 +180,7 @@ func _on_hosts_answer(_endpoint: String, data: Array) -> void:
     if mode == "pending":
         mode = "new"
         print("gibson: reading /api/v1/hosts and /api/v1/links")
-    host_rows = data.slice(0, GibsonLayout.MAX_TOWERS)
+    hosts = data.slice(0, GibsonLayout.MAX_TOWERS)
     _rebuild()
 
 func _on_links_answer(_endpoint: String, data: Array) -> void:
@@ -190,12 +189,11 @@ func _on_links_answer(_endpoint: String, data: Array) -> void:
         _rebuild()
 
 func _on_matrix_answer(_endpoint: String, data: Array) -> void:
-    host_rows = GibsonLayout.hosts_from_matrix(data)
+    hosts = GibsonLayout.hosts_from_matrix(data)
     link_rows = []
     _rebuild()
 
 func _rebuild() -> void:
-    hosts = host_rows
     var link_set: Array = GibsonLayout.links_from_hosts(hosts, HOME) if mode == "matrix" \
         else GibsonLayout.links_for(link_rows, hosts)
     var sources: Array = GibsonLayout.sources_of(link_set, HOME)
