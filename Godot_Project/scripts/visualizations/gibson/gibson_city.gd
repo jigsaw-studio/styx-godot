@@ -78,6 +78,8 @@ var _xr_active: bool = false
 var _xr_placed: bool = false
 var _xr_scale: float = -1.0          # -1: the table-top model (follows the city's size); else its scale, up to 1 (life size)
 var _xr_table_origin := Vector3.ZERO
+var _xr_life_spot := Vector3.ZERO    # where the city's origin goes at life size: fixed when the growing starts, so walking and the teleport move the viewer through it
+var _xr_life_set: bool = false
 var _xr_stick: float = 0.0
 var _xr_hover: String = ""           # the tower the right hand points at
 var _xr_pointer: MeshInstance3D
@@ -167,6 +169,21 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
     _restore_presentation()
+    # The controllers belong to the scene and outlive this view: take the beam and the connections off them.
+    if is_instance_valid(_xr_pointer):
+        _xr_pointer.queue_free()
+    var scene := _scene()
+    if scene == null:
+        return
+    var left := scene.get_node_or_null(XR_ORIGIN + "/LeftHand") as XRController3D
+    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as XRController3D
+    if left:
+        if left.button_pressed.is_connected(_xr_left_button):
+            left.button_pressed.disconnect(_xr_left_button)
+        if left.input_vector2_changed.is_connected(_xr_left_stick):
+            left.input_vector2_changed.disconnect(_xr_left_stick)
+    if right and right.button_pressed.is_connected(_xr_right_button):
+        right.button_pressed.disconnect(_xr_right_button)
 
 # ---- data -----------------------------------------------------------------
 
@@ -689,12 +706,7 @@ func _select(host: String) -> void:
     _fetch_log()
     _update_menu()
     if _xr_active:
-        var head := _xr_head()
-        if head:
-            var forward := -head.global_transform.basis.z
-            forward.y = 0.0
-            forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
-            _xr_menu_spot = Vector2(head.global_position.x + forward.x * 0.9, head.global_position.z + forward.z * 0.9)
+        _xr_set_menu_spot()
     else:
         var t: Dictionary = towers[host]
         var from := city_root.to_local(camera.global_position)
@@ -774,6 +786,16 @@ func _place_menu_xr() -> void:
     var origin := Vector3(_xr_menu_spot.x, 1.2 + half_height, _xr_menu_spot.y) + basis.x * 0.2
     menu.global_transform = Transform3D(basis, origin)
 
+# The menu stands 0.9 m ahead of the viewer, where they were looking when it opened.
+func _xr_set_menu_spot() -> void:
+    var head := _xr_head()
+    if head == null:
+        return
+    var forward := -head.global_transform.basis.z
+    forward.y = 0.0
+    forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
+    _xr_menu_spot = Vector2(head.global_position.x + forward.x * 0.9, head.global_position.z + forward.z * 0.9)
+
 func _xr_head() -> Node3D:
     var scene := _scene()
     return scene.get_node_or_null(XR_ORIGIN + "/XRCamera3D") as Node3D if scene else null
@@ -813,6 +835,8 @@ func _present() -> void:
     if xr != _xr_active:
         _xr_active = xr
         _xr_placed = false
+        if xr and selected != "":
+            _xr_set_menu_spot()
         if not xr:
             camera.make_current()
             _xr_hover = ""
@@ -873,7 +897,12 @@ func _present_xr() -> void:
     if next != current:
         current = next
         _xr_scale = -1.0 if current <= table + 1.0e-4 else current
-    var origin := _xr_table_origin.lerp(GibsonLayout.life_origin(head.global_position), GibsonLayout.zoom_k(current, table))
+    if current <= table + 1.0e-4:
+        _xr_life_set = false
+    elif not _xr_life_set:
+        _xr_life_set = true
+        _xr_life_spot = GibsonLayout.life_origin(head.global_position)
+    var origin := _xr_table_origin.lerp(_xr_life_spot, GibsonLayout.zoom_k(current, table))
     city_root.global_transform = Transform3D(Basis.from_scale(Vector3.ONE * current), origin)
     _xr_point(scene)
 
