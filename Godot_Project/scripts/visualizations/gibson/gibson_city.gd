@@ -172,11 +172,8 @@ func _exit_tree() -> void:
     # The controllers belong to the scene and outlive this view: take the beam and the connections off them.
     if is_instance_valid(_xr_pointer):
         _xr_pointer.queue_free()
-    var scene := _scene()
-    if scene == null:
-        return
-    var left := scene.get_node_or_null(XR_ORIGIN + "/LeftHand") as XRController3D
-    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as XRController3D
+    var left := _xr_hand("LeftHand") as XRController3D
+    var right := _xr_hand("RightHand") as XRController3D
     if left:
         if left.button_pressed.is_connected(_xr_left_button):
             left.button_pressed.disconnect(_xr_left_button)
@@ -407,7 +404,10 @@ func _add_chip_rim(chip: MeshInstance3D) -> void:
             chip.add_child(pin)
 
 func _update_board() -> void:
-    var half := extent + (BOARD_MARGIN if not _xr_active else (2.0 if Globals.passthrough_enabled else 8.0))
+    var margin := BOARD_MARGIN
+    if _xr_active:
+        margin = 2.0 if Globals.passthrough_enabled else 8.0
+    var half := extent + margin
     (ground.mesh as PlaneMesh).size = Vector2(2.0 * half, 2.0 * half)
 
 # ---- frame ----------------------------------------------------------------
@@ -437,10 +437,9 @@ func _process(delta: float) -> void:
 func _follow_camera() -> void:
     var viewer: Node3D = camera
     if _xr_active:
-        var scene := _scene()
-        var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") if scene else null
-        if xr_camera:
-            viewer = xr_camera
+        var head := _xr_head()
+        if head:
+            viewer = head
     # In XR the sky is only for life size without passthrough.
     sky.visible = not _xr_active or (_xr_scale >= 0.999 and not Globals.passthrough_enabled)
     sky.global_position = viewer.global_position
@@ -791,14 +790,22 @@ func _xr_set_menu_spot() -> void:
     var head := _xr_head()
     if head == null:
         return
-    var forward := -head.global_transform.basis.z
-    forward.y = 0.0
-    forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
+    var forward := _xr_forward(head)
     _xr_menu_spot = Vector2(head.global_position.x + forward.x * 0.9, head.global_position.z + forward.z * 0.9)
 
 func _xr_head() -> Node3D:
+    return _xr_hand("XRCamera3D")
+
+# A node of the scene's XR rig (the camera or a controller), or null.
+func _xr_hand(node_name: String) -> Node3D:
     var scene := _scene()
-    return scene.get_node_or_null(XR_ORIGIN + "/XRCamera3D") as Node3D if scene else null
+    return scene.get_node_or_null(XR_ORIGIN + "/" + node_name) as Node3D if scene else null
+
+# Where the viewer looks, flat on the floor.
+func _xr_forward(head: Node3D) -> Vector3:
+    var forward := -head.global_transform.basis.z
+    forward.y = 0.0
+    return forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
 
 func _apply_scheme() -> void:
     palette = GibsonSchemes.palette(scheme_id)
@@ -884,12 +891,9 @@ func _present_xr() -> void:
     var head := _xr_head()
     if head == null:
         return
-    _xr_wire(scene)
+    _xr_wire()
     if not _xr_placed:
-        var forward := -head.global_transform.basis.z
-        forward.y = 0.0
-        forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
-        _xr_table_origin = Vector3(head.global_position.x, 0.9, head.global_position.z) + forward * 1.2
+        _xr_table_origin = Vector3(head.global_position.x, 0.9, head.global_position.z) + _xr_forward(head) * 1.2
         _xr_placed = true
     var table := GibsonLayout.table_scale(extent)
     var current := table if _xr_scale < 0.0 else clampf(_xr_scale, table, 1.0)
@@ -904,17 +908,17 @@ func _present_xr() -> void:
         _xr_life_spot = GibsonLayout.life_origin(head.global_position)
     var origin := _xr_table_origin.lerp(_xr_life_spot, GibsonLayout.zoom_k(current, table))
     city_root.global_transform = Transform3D(Basis.from_scale(Vector3.ONE * current), origin)
-    _xr_point(scene)
+    _xr_point()
 
 # The controllers' signals, connected once: right trigger selects, left thumbstick scales,
 # left A/X the next scheme, left B/Y jumps between table-top and life size. Nothing here
 # touches the teleport (left trigger) or the turn (right thumbstick).
-func _xr_wire(scene: Node) -> void:
+func _xr_wire() -> void:
     if _xr_wired:
         return
     _xr_wired = true
-    var left := scene.get_node_or_null(XR_ORIGIN + "/LeftHand") as XRController3D
-    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as XRController3D
+    var left := _xr_hand("LeftHand") as XRController3D
+    var right := _xr_hand("RightHand") as XRController3D
     if left:
         left.button_pressed.connect(_xr_left_button)
         left.input_vector2_changed.connect(_xr_left_stick)
@@ -948,14 +952,13 @@ func _xr_left_button(action: String) -> void:
 func _xr_right_button(action: String) -> void:
     if action != "trigger_click" or not _xr_active:
         return
-    var scene := _scene()
-    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as Node3D if scene else null
+    var right := _xr_hand("RightHand")
     if right:
         _act_on_ray(right.global_position, -right.global_transform.basis.z)
 
 # The pointer is shown only in XR; the tower it points at is the hovered one.
-func _xr_point(scene: Node) -> void:
-    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as Node3D
+func _xr_point() -> void:
+    var right := _xr_hand("RightHand")
     if _xr_pointer:
         _xr_pointer.visible = true
     if right == null:
