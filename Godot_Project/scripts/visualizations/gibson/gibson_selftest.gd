@@ -131,6 +131,37 @@ func _init() -> void:
     var tp: Vector2 = L.tower_position(p, "a.github.com")
     check(is_equal_approx(tp.x, 16.0 + (0 - 1.5) * 3.0) and is_equal_approx(tp.y, (0 - 1.5) * 3.0), "tower position of slot 1 lot 0")
 
+    # Links and sources.
+    var link_rows := [
+        {"source": "llm-auth", "target": "a.org", "count": 2}, {"source": "harness", "target": "a.org", "count": 5},
+        {"source": "harness", "target": "gone.org", "count": 1}, {"source": "harness", "target": "b.org", "count": 1},
+    ]
+    var kept: Array = L.links_for(link_rows, [row("a.org"), row("b.org")])
+    check(kept.size() == 3 and kept[0]["source"] == "llm-auth", "links to hosts without towers are dropped")
+    check(L.sources_of(kept, "LOCAL") == ["harness", "llm-auth"], "sources, ascending, distinct")
+    check(L.sources_of([], "LOCAL") == ["LOCAL"], "no links: the fallback source")
+    var s17 := L.new_placement()
+    var seventeen := []
+    for i in range(17):
+        seventeen.append("src%02d" % i)
+    L.place(s17, [], seventeen)
+    check(s17["home"]["src15"] == 15 and s17["home"]["src16"] == 15, "a 17th source shares lot 15")
+    var s2 := L.new_placement()
+    L.place(s2, [], ["harness", "llm-auth"])
+    L.place(s2, [], ["harness", "llm-auth", "aaa"])
+    check(s2["home"]["harness"] == 0 and s2["home"]["llm-auth"] == 1 and s2["home"]["aaa"] == 2, "sources keep their lots when another arrives")
+    var from_hosts: Array = L.links_from_hosts([row("a.org", 4, 10, 20)], "LOCAL")
+    check(from_hosts.size() == 1 and from_hosts[0]["source"] == "LOCAL" and from_hosts[0]["target"] == "a.org" and from_hosts[0]["count"] == 4, "one link per host from LOCAL")
+    var busy := row("a.org")
+    var quiet := row("b.org")
+    quiet["last_seen_ago"] = 30
+    var older := row("c.org")
+    older["last_seen_ago"] = 600
+    check(is_equal_approx(L.brightness_of(busy), 1.0) and is_equal_approx(L.brightness_of(quiet), 0.35) and L.brightness_of(older) == L.brightness_of(quiet), "brightness runs 0.35 to 1.0")
+    check(L.car_interval({"count": 1, "last_seen_ago": 61, "open": 0}) < 0.0, "a link quiet over a minute sends none")
+    check(L.car_interval({"count": 1, "last_seen_ago": 61, "open": 1}) > 0.0, "unless a connection is open")
+    check(is_equal_approx(L.car_interval({"count": 0, "last_seen_ago": 0}), 6.0), "interval of an unseen link is 6 s")
+
     # Sizes.
     var sized := L.tower_sizes([row("a.org", 100, 1000, 9000), row("b.org", 1, 10, 0), row("c.org", 3, 0, 0)])
     for h in sized.values():

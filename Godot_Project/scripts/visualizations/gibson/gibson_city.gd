@@ -2,8 +2,9 @@ extends Node3D
 class_name GibsonCity
 
 # The Gibson visualization: a city of translucent towers on a circuit-board ground,
-# one tower per host. This version reads the Matrix's feed (/api/v1/matrix) and
-# derives hosts from it; the layout rules are GibsonLayout's, the colours GibsonSchemes'.
+# one tower per host. It reads /api/v1/hosts and /api/v1/links when the server has
+# them, and otherwise the Matrix's feed (/api/v1/matrix), from which it derives hosts
+# and one link per host. The layout rules are GibsonLayout's, the colours GibsonSchemes'.
 
 const DEFAULT_POLL_SECONDS := 30.0
 const FRESH_SECONDS := 6.0
@@ -29,7 +30,12 @@ var ground: MeshInstance3D
 var towers_root: Node3D
 var chips_root: Node3D
 var camera: GibsonCamera
-var api: StyxApi
+var api: StyxApi                     # the Matrix feed; only made in the fallback mode
+var hosts_api: StyxApi
+var links_api: StyxApi
+var mode: String = "pending"         # "pending" (first answer not in), "new" (hosts and links), "matrix"
+var host_rows: Array = []            # the last /v1/hosts answer, cut
+var link_rows: Array = []            # the last /v1/links answer
 var sky: MeshInstance3D
 var streaks: MultiMeshInstance3D
 var _ground_material: ShaderMaterial
@@ -38,7 +44,7 @@ var _streak_material: ShaderMaterial
 var _rim_material: StandardMaterial3D
 var _font: Font = load(FONT_PATH) if ResourceLoader.exists(FONT_PATH) else null
 var cars: Array = []                 # {host, points, lengths, along, dir, color, flash}
-var links: Dictionary = {}           # host -> {next, seq}
+var links: Dictionary = {}           # source + ">" + target -> {next, seq, row, source, host, route}
 
 var scheme_id: String = "state"
 var palette: Dictionary = {}
@@ -119,13 +125,12 @@ func _ready() -> void:
     camera.name = "camera"
     add_child(camera)
 
-    api = StyxApi.new()
-    api.request_on_ready = false
-    var window := Globals.api_relative if Globals.api_relative != "" else "60s"
-    api.init("/api/v1/matrix?relative=" + window)
-    api.data_received.connect(_on_data)
-    add_child(api)
-    api.send_request()
+    hosts_api = _make_api("/api/v1/hosts?relative=" + _window())
+    hosts_api.data_received.connect(_on_hosts_answer)
+    hosts_api.request_failed.connect(_on_hosts_failed)
+    links_api = _make_api("/api/v1/links?relative=" + _window())
+    links_api.data_received.connect(_on_links_answer)
+    _poll()
 
     GibsonLayout.place(placement, [], [HOME])
     _sync_chips()
@@ -140,9 +145,60 @@ func _exit_tree() -> void:
 
 # ---- data -----------------------------------------------------------------
 
-func _on_data(_endpoint: String, data: Array) -> void:
-    hosts = GibsonLayout.hosts_from_matrix(data)
-    GibsonLayout.place(placement, hosts, [HOME])
+func _window() -> String:
+    return Globals.api_relative if Globals.api_relative != "" else "60s"
+
+func _make_api(path: String) -> StyxApi:
+    var node := StyxApi.new()
+    node.request_on_ready = false
+    node.init(path)
+    add_child(node)
+    return node
+
+func _poll() -> void:
+    if mode == "matrix":
+        api.send_request()
+    else:
+        hosts_api.send_request()
+        links_api.send_request()
+
+# The first /v1/hosts answer decides the mode: a server without the new API is asked
+# for the Matrix feed instead, and the new API is not asked again until the next time
+# the visualization is shown.
+func _on_hosts_failed(_endpoint: String) -> void:
+    if mode != "pending":
+        return
+    mode = "matrix"
+    print("gibson: /api/v1/hosts is not served, reading the Matrix feed")
+    hosts_api.queue_free()
+    links_api.queue_free()
+    api = _make_api("/api/v1/matrix?relative=" + _window())
+    api.data_received.connect(_on_matrix_answer)
+    api.send_request()
+
+func _on_hosts_answer(_endpoint: String, data: Array) -> void:
+    if mode == "pending":
+        mode = "new"
+        print("gibson: reading /api/v1/hosts and /api/v1/links")
+    host_rows = data.slice(0, GibsonLayout.MAX_TOWERS)
+    _rebuild()
+
+func _on_links_answer(_endpoint: String, data: Array) -> void:
+    link_rows = data
+    if mode == "new":
+        _rebuild()
+
+func _on_matrix_answer(_endpoint: String, data: Array) -> void:
+    host_rows = GibsonLayout.hosts_from_matrix(data)
+    link_rows = []
+    _rebuild()
+
+func _rebuild() -> void:
+    hosts = host_rows
+    var link_set: Array = GibsonLayout.links_from_hosts(hosts, HOME) if mode == "matrix" \
+        else GibsonLayout.links_for(link_rows, hosts)
+    var sources: Array = GibsonLayout.sources_of(link_set, HOME)
+    GibsonLayout.place(placement, hosts, sources)
     sizes = GibsonLayout.tower_sizes(hosts)
 
     var first: bool = known == null
@@ -173,9 +229,6 @@ func _on_data(_endpoint: String, data: Array) -> void:
             material.set_shader_parameter("page_rows", float(clampi(page.size(), 1, GibsonFont.MAX_PAGE_ROWS)))
         var label: Label3D = t["label"]
         label.visibility_range_end = 0.0 if rank < BUSIEST_LABELS else LABEL_RANGE
-        t["route"] = GibsonLayout.route_of(GibsonLayout.chip_position(placement, HOME), pos)
-        if not links.has(host):
-            links[host] = {"next": GibsonLayout.hash01(host) * _interval_of(row), "seq": 0}
         if is_new:
             t["height"] = t["target"] if first else 0.0
         if not known.has(host):
@@ -187,8 +240,25 @@ func _on_data(_endpoint: String, data: Array) -> void:
             towers[host]["node"].queue_free()
             towers[host]["label"].queue_free()
             towers.erase(host)
-            links.erase(host)
             known.erase(host)
+
+    # One traffic link per link row; a link keeps its clock across answers.
+    var live := {}
+    for l in link_set:
+        var id := "%s>%s" % [l["source"], l["target"]]
+        live[id] = true
+        var entry: Dictionary = links.get(id, {})
+        if entry.is_empty():
+            entry = {"next": GibsonLayout.hash01(id) * 3.0, "seq": 0}
+            links[id] = entry
+        entry["row"] = l
+        entry["host"] = str(l["target"])
+        entry["route"] = GibsonLayout.route_of(
+            GibsonLayout.chip_position(placement, str(l["source"])),
+            GibsonLayout.tower_position(placement, str(l["target"])))
+    for id in links.keys():
+        if not live.has(id):
+            links.erase(id)
 
     extent = GibsonLayout.extent_of(placement)
     camera.extent = extent
@@ -292,7 +362,7 @@ func _process(delta: float) -> void:
     poll_accumulator += delta
     if poll_accumulator >= seconds:
         poll_accumulator = 0.0
-        api.send_request()
+        _poll()
 
     _animate_towers(delta)
     _run_traffic(delta)
@@ -341,10 +411,10 @@ func _animate_towers(delta: float) -> void:
         if key != t["style"]:
             t["style"] = key
             _style_tower(t, fresh)
-        # Brightness: activity (1: the Matrix feed has no ages), a slow pulse while a
-        # connection is open, and a short boost when a car arrives.
+        # Brightness: how lately it was reached (full when the feed has no ages), a slow
+        # pulse while a connection is open, and a short boost when a car arrives.
         var row: Dictionary = t["row"]
-        var level := 1.0
+        var level := GibsonLayout.brightness_of(row)
         if int(row.get("open", 0)) > 0:
             level *= 1.0 + 0.15 * sin(TAU * clock / 2.0)
         var arrived: float = clock - t["arrived"]
@@ -378,10 +448,6 @@ func _style_tower(t: Dictionary, fresh: bool) -> void:
 
 # ---- traffic --------------------------------------------------------------------
 
-func _interval_of(row: Dictionary) -> float:
-    var count := float(row.get("count", 1))
-    return clampf(6.0 / (1.0 + log(1.0 + count)), 0.4, 6.0) * (1.0 + float(row.get("last_seen_ago", 0)) / 10.0)
-
 func _car_color(t: Dictionary, refused: bool) -> Color:
     var traffic = palette["traffic"]
     if refused and not palette["marks"]:
@@ -391,17 +457,22 @@ func _car_color(t: Dictionary, refused: bool) -> Color:
     return palette["glass"][t["tone"]].lerp(Color.WHITE, 0.6)
 
 func _run_traffic(delta: float) -> void:
-    # New cars, one link per tower.
-    for host in links:
+    # New cars, from each link's own numbers.
+    for id in links:
+        var link: Dictionary = links[id]
+        var host: String = link["host"]
         if not towers.has(host):
             continue
-        var link: Dictionary = links[host]
+        var row: Dictionary = link["row"]
+        var interval := GibsonLayout.car_interval(row)
         link["next"] -= delta
+        if interval < 0.0:
+            link["next"] = maxf(link["next"], 0.0)   # quiet: no car, and none owed when it wakes
+            continue
         if link["next"] > 0.0:
             continue
         var t: Dictionary = towers[host]
-        var row: Dictionary = t["row"]
-        link["next"] += _interval_of(row)
+        link["next"] += interval
         link["seq"] += 1
         if cars.size() >= MAX_CARS:
             continue   # the cap: this link's car is skipped
@@ -410,8 +481,8 @@ func _run_traffic(delta: float) -> void:
         var sent := float(row.get("sent", 0))
         var received := float(row.get("received", 0))
         var share := clampf(sent / (sent + received), 0.2, 0.8) if sent + received > 0.0 else 1.0
-        var outbound := refused or GibsonLayout.hash01(host + ":" + str(link["seq"])) < share
-        var points: PackedVector2Array = t["route"]
+        var outbound := refused or GibsonLayout.hash01(id + ":" + str(link["seq"])) < share
+        var points: PackedVector2Array = link["route"]
         if points.size() < 2:
             continue
         var lengths := PackedFloat32Array()

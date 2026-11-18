@@ -137,6 +137,52 @@ static func hosts_from_matrix(rows: Array) -> Array:
         out.resize(MAX_TOWERS)
     return out
 
+# Link rows (/v1/links: source, target, sent, received, count, open, blocked,
+# last_seen_ago) whose target has a tower, in the order given.
+static func links_for(links: Array, hosts: Array) -> Array:
+    var present := {}
+    for h in hosts:
+        present[h["host"]] = true
+    var out := []
+    for l in links:
+        if typeof(l) == TYPE_DICTIONARY and present.has(str(l.get("target", ""))) and str(l.get("source", "")) != "":
+            out.append(l)
+    return out
+
+# The distinct sources of some links, ascending (a stable order for the home chips);
+# `fallback` alone when there are none.
+static func sources_of(links: Array, fallback: String) -> Array:
+    var seen := {}
+    for l in links:
+        seen[str(l["source"])] = true
+    var out: Array = seen.keys()
+    out.sort()
+    return out if not out.is_empty() else [fallback]
+
+# What the Matrix feed gives in place of links: one link per host, from `home`.
+static func links_from_hosts(hosts: Array, home: String) -> Array:
+    var out := []
+    for h in hosts:
+        out.append({
+            "source": home, "target": h["host"], "sent": h["sent"], "received": h["received"],
+            "count": h["count"], "open": h["open"], "blocked": h["blocked"],
+            "last_seen_ago": h["last_seen_ago"],
+        })
+    return out
+
+# How bright a tower's glass is: 0.35 (quiet) to 1.0 (reached now).
+static func brightness_of(row: Dictionary) -> float:
+    var activity := clampf(1.0 - float(row.get("last_seen_ago", 0)) / 30.0, 0.0, 1.0)
+    return 0.35 + 0.65 * activity
+
+# Seconds between a link's cars; a link quiet for over a minute with nothing open sends none (-1).
+static func car_interval(link: Dictionary) -> float:
+    var ago := float(link.get("last_seen_ago", 0))
+    if ago > 60.0 and int(link.get("open", 0)) <= 0:
+        return -1.0
+    var count := float(link.get("count", 1))
+    return clampf(6.0 / (1.0 + log(1.0 + count)), 0.4, 6.0) * (1.0 + ago / 10.0)
+
 # "blocked" | "untunnelled" | "local" | "normal"; the first that matches.
 static func tone_of(row: Dictionary) -> String:
     var count := int(row.get("count", 0))
