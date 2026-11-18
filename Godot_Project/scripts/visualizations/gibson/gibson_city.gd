@@ -11,6 +11,7 @@ const FRESH_SECONDS := 6.0
 const RISE_SECONDS := 1.2
 const HEIGHT_EASE_SECONDS := 0.6
 const BOARD_MARGIN := 96.0
+const SKY_SHOWN := false             # the sky image is off: it obscured towers (the board, then black, is all there is behind them)
 const HOME := "LOCAL"
 const MAX_CARS := 96
 const CAR_SPEED := 40.0
@@ -441,7 +442,7 @@ func _follow_camera() -> void:
         if head:
             viewer = head
     # In XR the sky is only for life size without passthrough.
-    sky.visible = not _xr_active or (_xr_scale >= 0.999 and not Globals.passthrough_enabled)
+    sky.visible = SKY_SHOWN and (not _xr_active or (_xr_scale >= 0.999 and not Globals.passthrough_enabled))
     sky.global_position = viewer.global_position
     var local := city_root.to_local(viewer.global_position)
     _ground_material.set_shader_parameter("camera_local", local)

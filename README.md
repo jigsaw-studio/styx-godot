@@ -97,7 +97,7 @@ Godot --path Godot_Project --headless --export-release "Web (Layman)" build/laym
 ![The Matrix embedded](docs/images/styx-layman-embed.png)
 
 ### Gibson
-A second view, after the "city of text" sequences of a 1995 film: a city of translucent towers on a circuit-board ground, under a slow sky of filaments and formulas.
+A second view, after the "city of text" sequences of a 1995 film: a city of translucent towers on a circuit-board ground, on black. (The sky image of filaments and formulas is switched off, `SKY_SHOWN` in `gibson_city.gd`: it obscured towers.)
 
 - **Towers**: one per remote host. The more data, the taller; the more connections, the wider. Rows of real text (host, ports, counts, bytes) cover the faces and turn into bars from far away. A tower is green when normal, red when every connection was refused (a partly refused one has a red cap), amber when outside the tunnel, cyan when local; one that appears now rises, pale, for a few seconds.
 - **Blocks**: hosts of one registrable domain stand together on a block of up to 16 lots, and a tower keeps its lot as the data changes. The busiest domains are nearest the centre. The local side is the low chip at the centre with the magenta rim (amber in Night).
@@ -115,7 +115,7 @@ or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, 
 | Left A / X | Next colour scheme |
 | Left B / Y | Jump between table-top and life size |
 
-The teleport (left trigger) and turning (right thumbstick) are unchanged. With passthrough the sky is hidden and the board is smaller, so the room shows around the model; the sky is shown only at life size without passthrough. The visionOS build keeps the bar charts. At most 160 towers are drawn.
+The teleport (left trigger) and turning (right thumbstick) are unchanged. With passthrough the board is smaller, so the room shows around the model. The visionOS build keeps the bar charts. At most 160 towers are drawn.
 
 ![Gibson](docs/images/styx-gibson.png)
 
