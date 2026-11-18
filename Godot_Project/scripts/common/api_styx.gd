@@ -43,11 +43,19 @@ func init(api_path: String) -> void:
     is_initialized = true
     api_endpoint = api_path
 
-# Ask for another path from now on (a selected tower's log).
+# Give up on the request in flight: its answer is never emitted, and a UDP fragment of
+# it that arrives late cannot join the next answer.
+func cancel() -> void:
+    if _uses_http() and request_in_flight:
+        http_client.cancel_request()
+    request_in_flight = false
+    _udp_waiting = -1.0
+    packet_fragments.clear()
+
+# Ask for another path from now on (a selected tower's log); what was asked before is dropped.
 func set_endpoint(api_path: String) -> void:
+    cancel()
     api_endpoint = api_path
-    if not _uses_http():
-        packet_fragments.clear()
 
 func _ready():
     if _uses_http():

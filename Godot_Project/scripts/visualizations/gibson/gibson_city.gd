@@ -18,6 +18,9 @@ const CAR_Y := 0.06
 const FLASH_SECONDS := 0.3
 const ARRIVAL_SECONDS := 0.4
 const BUSIEST_LABELS := 12
+const LOG_POLL_SECONDS := 5.0
+const FLY_SECONDS := 1.2
+const CLICK_SLOP := 6.0
 const LABEL_RANGE := 60.0
 const TOWER_SHADER := preload("res://shaders/gibson/gibson_tower.gdshader")
 const GROUND_SHADER := preload("res://shaders/gibson/gibson_ground.gdshader")
@@ -35,6 +38,16 @@ var hosts_api: StyxApi
 var links_api: StyxApi
 var mode: String = "pending"         # "pending" (first answer not in), "new" (hosts and links), "matrix"
 var link_rows: Array = []            # the last /v1/links answer
+var menu: GibsonMenu
+var log_api: StyxApi                 # made on the first selection
+var selected: String = ""            # the host of the selected tower
+var log_rows: Array = []             # the selected host's rows of /v1/flows
+var log_lines: PackedStringArray = PackedStringArray()
+var log_state: String = "reading"    # "reading", "ready", "unavailable"
+var pick: int = 0                    # the picked menu item
+var log_accumulator: float = 0.0
+var _press_at := Vector2.ZERO
+var _select_done: bool = false
 var sky: MeshInstance3D
 var streaks: MultiMeshInstance3D
 var _ground_material: ShaderMaterial
@@ -119,6 +132,9 @@ func _ready() -> void:
     sky.material_override = _sky_material
     sky.extra_cull_margin = 4096.0
     add_child(sky)
+
+    menu = GibsonMenu.new()
+    city_root.add_child(menu)
 
     camera = GibsonCamera.new()
     camera.name = "camera"
@@ -220,12 +236,7 @@ func _rebuild() -> void:
         t["side"] = sizes[host]["side"]
         var pos := GibsonLayout.tower_position(placement, host)
         t["node"].position = Vector3(pos.x, t["node"].position.y, pos.y)
-        var page := GibsonLayout.page_of(row)
-        if page != t["page"]:
-            t["page"] = page
-            var material: ShaderMaterial = t["material"]
-            material.set_shader_parameter("page", GibsonFont.page_texture(page))
-            material.set_shader_parameter("page_rows", float(clampi(page.size(), 1, GibsonFont.MAX_PAGE_ROWS)))
+        _set_page(host)
         var label: Label3D = t["label"]
         label.visibility_range_end = 0.0 if rank < BUSIEST_LABELS else LABEL_RANGE
         if is_new:
@@ -240,6 +251,8 @@ func _rebuild() -> void:
             towers[host]["label"].queue_free()
             towers.erase(host)
             known.erase(host)
+            if host == selected:
+                _select("")
 
     # One traffic link per link row; a link keeps its clock across answers.
     var live := {}
@@ -261,10 +274,26 @@ func _rebuild() -> void:
         if not live.has(id):
             links.erase(id)
 
+    if Globals.select_host != "" and not _select_done and towers.has(Globals.select_host):
+        _select_done = true
+        _select(Globals.select_host)
+
     extent = GibsonLayout.extent_of(placement)
     camera.extent = extent
     _update_board()
     _sync_chips()
+
+# A tower's page: its lines, and its log when it is the selected one.
+func _set_page(host: String) -> void:
+    if not towers.has(host):
+        return
+    var t: Dictionary = towers[host]
+    var page := GibsonLayout.page_of(t["row"], log_lines if host == selected else PackedStringArray())
+    if page != t["page"]:
+        t["page"] = page
+        var material: ShaderMaterial = t["material"]
+        material.set_shader_parameter("page", GibsonFont.page_texture(page))
+        material.set_shader_parameter("page_rows", float(clampi(page.size(), 1, GibsonFont.MAX_PAGE_ROWS)))
 
 func _make_tower(host: String) -> void:
     var node := MeshInstance3D.new()
@@ -280,7 +309,7 @@ func _make_tower(host: String) -> void:
     towers[host] = {
         "node": node, "material": material, "label": label, "row": {}, "tone": "normal",
         "height": 0.0, "target": 1.0, "side": 1.5, "born": -1000.0,
-        "arrived": -1000.0, "page": PackedStringArray(), "style": "",
+        "arrived": -1000.0, "page": PackedStringArray(), "style": "", "host": host,
     }
 
 func _sync_chips() -> void:
@@ -365,6 +394,12 @@ func _process(delta: float) -> void:
         poll_accumulator = 0.0
         _poll()
 
+    if selected != "":
+        log_accumulator += delta
+        if log_accumulator >= LOG_POLL_SECONDS:
+            log_accumulator = 0.0
+            _fetch_log()
+        _place_menu()
     _animate_towers(delta)
     _run_traffic(delta)
     _present()
@@ -385,7 +420,7 @@ func _follow_camera() -> void:
     _ground_material.set_shader_parameter("camera_local", local)
 
 func _style_key(t: Dictionary, fresh: bool) -> String:
-    return "%s|%s|%s" % [scheme_id, t["tone"], fresh]
+    return "%s|%s|%s|%s" % [scheme_id, t["tone"], fresh, t["host"] == selected]
 
 func _animate_towers(delta: float) -> void:
     var ease_k := 1.0 - exp(-delta / (HEIGHT_EASE_SECONDS / 4.0))
@@ -435,6 +470,8 @@ func _style_tower(t: Dictionary, fresh: bool) -> void:
     material.set_shader_parameter("stripes", marks and tone == "blocked")
     material.set_shader_parameter("dashes", marks and tone == "untunnelled")
     material.set_shader_parameter("windows", palette["windows"])
+    material.set_shader_parameter("selected", t["host"] == selected)
+    material.set_shader_parameter("highlight", palette["highlight"])
     var row: Dictionary = t["row"]
     var count := float(row.get("count", 0))
     var fraction := float(row.get("blocked", 0)) / count if count > 0.0 else 0.0
@@ -556,12 +593,152 @@ func _segment_on(car: Dictionary, travelled: float) -> int:
 # ---- schemes -------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
+    if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not _xr_active:
+        var mb := event as InputEventMouseButton
+        if mb.pressed:
+            _press_at = mb.position
+        elif mb.position.distance_to(_press_at) < CLICK_SLOP:
+            _click(mb.position)
+        return
     if Globals.embed or not (event is InputEventKey):
         return
     var key := event as InputEventKey
-    if key.pressed and not key.echo and key.keycode == KEY_C:
+    if not key.pressed or key.echo:
+        return
+    if key.keycode == KEY_C:
         scheme_id = GibsonSchemes.next_id(scheme_id)
         _apply_scheme()
+    elif selected != "" and key.keycode == KEY_ESCAPE:
+        _select("")
+        get_viewport().set_input_as_handled()
+    elif selected != "" and (key.keycode == KEY_UP or key.keycode == KEY_DOWN):
+        pick = maxi(0, mini(pick + (1 if key.keycode == KEY_DOWN else -1), menu.groups.size() - 1))
+        _update_menu()
+        get_viewport().set_input_as_handled()
+
+# A click that was not a drag: an item of the menu, else a tower, else nothing.
+func _click(at: Vector2) -> void:
+    var viewport_camera := get_viewport().get_camera_3d()
+    if viewport_camera == null:
+        return
+    var origin := viewport_camera.project_ray_origin(at)
+    var direction := viewport_camera.project_ray_normal(at)
+    if selected != "" and menu.visible:
+        var to_menu := menu.global_transform.affine_inverse()
+        var item := menu.item_at(to_menu * origin, (to_menu.basis * direction).normalized())
+        if item >= 0:
+            pick = item
+            _update_menu()
+            return
+    var to_city := city_root.global_transform.affine_inverse()
+    var hit := _tower_hit(to_city * origin, (to_city.basis * direction).normalized())
+    _select(hit)
+
+# The host of the tower a ray (in the city's space) enters first, or "".
+func _tower_hit(origin: Vector3, direction: Vector3) -> String:
+    var hosts_in_order := []
+    var boxes := []
+    for host in towers:
+        var node: MeshInstance3D = towers[host]["node"]
+        var half := node.scale.x / 2.0
+        boxes.append({
+            "min": Vector3(node.position.x - half, 0.0, node.position.z - half),
+            "max": Vector3(node.position.x + half, node.scale.y, node.position.z + half),
+        })
+        hosts_in_order.append(host)
+    var index := GibsonLayout.pick_box(origin, direction, boxes)
+    return hosts_in_order[index] if index >= 0 else ""
+
+# ---- selection, the log and the menu ----------------------------------------------
+
+func _select(host: String) -> void:
+    if host == selected:
+        return
+    var before := selected
+    selected = host
+    log_rows = []
+    log_lines = PackedStringArray()
+    log_state = "reading"
+    pick = 0
+    log_accumulator = 0.0
+    _set_page(before)
+    for name in [before, host]:
+        if towers.has(name):
+            towers[name]["style"] = ""
+    camera.holding = host != ""
+    if host == "":
+        if log_api:
+            log_api.cancel()
+        menu.hide_menu()
+        return
+    _set_page(host)
+    _fetch_log()
+    _update_menu()
+    if not _xr_active:
+        var t: Dictionary = towers[host]
+        var from := city_root.to_local(camera.global_position)
+        var node: MeshInstance3D = t["node"]
+        var fly := GibsonLayout.fly_pose(Vector2(node.position.x, node.position.z), t["side"], t["target"], Vector2(from.x, from.z))
+        camera.fly_to(city_root.to_global(fly["eye"]), city_root.to_global(fly["target"]), FLY_SECONDS)
+
+func _fetch_log() -> void:
+    if mode == "matrix":
+        log_state = "unavailable"   # the Matrix feed has no log
+        _update_menu()
+        return
+    if log_api == null:
+        log_api = _make_api("/api/v1/flows")
+        log_api.data_received.connect(_on_log_answer)
+        log_api.request_failed.connect(_on_log_failed)
+    log_api.set_endpoint("/api/v1/flows?host=%s&limit=100&relative=%s" % [selected.uri_encode(), _window()])
+    log_api.send_request()
+
+func _bias_seconds() -> int:
+    return int(Time.get_time_zone_from_system()["bias"]) * 60
+
+func _on_log_answer(_endpoint: String, data: Array) -> void:
+    if selected == "":
+        return
+    log_rows = GibsonLayout.log_of(selected, data)
+    log_lines = GibsonLayout.log_lines(log_rows, _bias_seconds())
+    log_state = "ready"
+    _set_page(selected)
+    _update_menu()
+
+func _on_log_failed(_endpoint: String) -> void:
+    if selected != "" and log_state == "reading":
+        log_state = "unavailable"
+        _update_menu()
+
+func _update_menu() -> void:
+    if selected == "" or not towers.has(selected):
+        menu.hide_menu()
+        return
+    menu.show_menu(selected, towers[selected]["row"], log_rows, log_state, pick, palette, _bias_seconds())
+    pick = menu.picked
+
+# The menu stands 0.3 in front of the selected tower's face nearest the viewer, faces the
+# viewer's horizontal direction, and has its top at min(height, 9), or higher when the
+# menu is taller than that.
+func _place_menu() -> void:
+    if not towers.has(selected) or not menu.visible:
+        return
+    var t: Dictionary = towers[selected]
+    var node: MeshInstance3D = t["node"]
+    var viewer := city_root.to_local(camera.global_position)
+    if _xr_active:
+        var scene := _scene()
+        var head := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") as Node3D if scene else null
+        if head:
+            viewer = city_root.to_local(head.global_position)
+    var at := Vector2(node.position.x, node.position.z)
+    var n := GibsonLayout.face_normal(Vector2(viewer.x, viewer.z), at)
+    var centre := at + n * (float(t["side"]) / 2.0 + 0.3)
+    var top := maxf(minf(float(t["height"]), 9.0), menu.height())
+    var flat := Vector2(viewer.x - centre.x, viewer.z - centre.y)
+    var yaw := atan2(flat.x, flat.y) if flat.length() > 0.001 else 0.0
+    menu.rotation = Vector3(0.0, yaw, 0.0)
+    menu.position = Vector3(centre.x, top, centre.y) + menu.basis.x * 0.2
 
 func _apply_scheme() -> void:
     palette = GibsonSchemes.palette(scheme_id)
@@ -577,6 +754,7 @@ func _apply_scheme() -> void:
         (chip.get_node("label") as Label3D).modulate = palette["text"]["normal"]
     for t in towers.values():
         t["style"] = ""
+    _update_menu()
     for car in cars:
         car["color"] = _car_color(towers[car["host"]], car["refused"]) if towers.has(car["host"]) else car["color"]
 

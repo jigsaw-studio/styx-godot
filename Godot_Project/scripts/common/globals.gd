@@ -36,6 +36,8 @@ var scheme: String = "state"
 # Native only, for checking a picture without a person: save one frame to this
 # PNG after shot_after seconds, then quit.
 var shot: String = ""
+# Gibson: the host to select as soon as its tower exists (--select=<host>).
+var select_host: String = ""
 var shot_after: float = 6.0
 
 const VIZ_IDS := ["matrix", "gibson"]
@@ -87,6 +89,10 @@ func _read_settings() -> void:
     var wanted_scheme: String = args.get("scheme", "")
     if GibsonSchemes.IDS.has(wanted_scheme):
         scheme = wanted_scheme
+
+    var wanted_select: String = args.get("select", "")
+    if GibsonLayout.valid_host(wanted_select):
+        select_host = wanted_select
 
     # A path the process may write: native only, absolute, a .png.
     var wanted_shot: String = args.get("shot", "")

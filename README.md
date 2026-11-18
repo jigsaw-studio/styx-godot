@@ -85,6 +85,7 @@ Point the app at it, on the command line (arguments go after `--`) or, for the w
 | `--poll=2` | `&poll=2` | Every N seconds (1 to 60) also ask for destinations not yet shown and add them at once (the Matrix; off by default). Gibson asks for the whole city again every N seconds, or every 30 when this is not set |
 | | `&embed=1` | On black, no interface, no keys: for an iframe. The Matrix has a fixed camera; Gibson tours by itself, and dragging and the wheel still move it |
 | `--viz=gibson` | `&viz=gibson` | Show the Gibson city instead of the Matrix (default `matrix`) |
+| `--select=<host>` | `&select=<host>` | Gibson: select this host's tower as soon as it exists (lower-case letters, digits and `. _ : [ ] / -`, up to 255) |
 | `--scheme=state` | `&scheme=state` | Gibson's colours: `state` (default), `green`, `cyan`, `red`, `night` |
 | `--shot=/abs/path.png` | | Native only: save one frame to this PNG and quit (check a picture without a person) |
 | `--shot-after=6` | | Seconds before `--shot` is taken (1 to 120) |
@@ -100,12 +101,12 @@ A second view, after the "city of text" sequences of a 1995 film: a city of tran
 
 - **Towers**: one per remote host. The more data, the taller; the more connections, the wider. Rows of real text (host, ports, counts, bytes) cover the faces and turn into bars from far away. A tower is green when normal, red when every connection was refused (a partly refused one has a red cap), amber when outside the tunnel, cyan when local; one that appears now rises, pale, for a few seconds.
 - **Blocks**: hosts of one registrable domain stand together on a block of up to 16 lots, and a tower keeps its lot as the data changes. The busiest domains are nearest the centre. The local side is the low chip at the centre with the magenta rim (amber in Night).
-- **Streaks**: light racing along the streets between the home chip and a tower. In this version they are drawn from the same feed as the Matrix (`/api/v1/matrix`), so there is one home chip and every host is equally recent; real links, selection and the menu come with the Gibson API.
+- **Streaks**: light racing along the streets between the home chip and a tower. Gibson reads `/api/v1/hosts`, `/api/v1/links` and (for a selected tower) `/api/v1/flows` when the server has them: one home chip per source of the links, one route per link, and a tower is dimmer the longer ago it was reached. When the first `/api/v1/hosts` request fails (a Pi that was not updated, any server without it) it reads the Matrix feed (`/api/v1/matrix`) instead, as before: one home chip, every host equally recent, and no log to select.
 
 ```
 Godot --path Godot_Project -- --viz=gibson --api=http://localhost:8880/api/styx
 ```
-or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, red and night show state as marks: stripes for refused, dashes for outside the tunnel). The camera tours the city by itself; any input takes over: `W A S D` fly along the view, the arrows turn and tilt it, `Page Up` / `Page Down` go up and down, `Space` held is three times faster, `Home` returns overhead, dragging with the left button looks, the wheel moves along the view, and the on-screen stick and pad work on touch. In XR the city is a table-top model. The visionOS build keeps the bar charts. At most 160 towers are drawn.
+or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, red and night show state as marks: stripes for refused, dashes for outside the tunnel). The camera tours the city by itself; any input takes over: `W A S D` fly along the view, the arrows turn and tilt it, `Page Up` / `Page Down` go up and down, `Space` held is three times faster, `Home` returns overhead, dragging with the left button looks, the wheel moves along the view, and the on-screen stick and pad work on touch. Clicking a tower (a click, not a drag) selects it: it turns the scheme's highlight colour, the camera flies to 9 units from its nearest face, its faces carry its log (`HH:MM:SS <PORT> <STATE>`, newest first) and a menu stands in front of it: the log grouped by port and via (right-aligned, `Up` / `Down` or a click picks one), and beside the picked group its newest four rows as boxes (`GET /PATH` and `OK 1.7K 83.8K`; a refused row is red with `REFUSED <RULE>`). `Escape` or a click on empty space deselects. The tour does not resume while a tower is selected. In XR the city is a table-top model. The visionOS build keeps the bar charts. At most 160 towers are drawn.
 
 ![Gibson](docs/images/styx-gibson.png)
 

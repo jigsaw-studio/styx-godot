@@ -377,7 +377,7 @@ static func _join(items: Array) -> String:
 
 # The lines of a tower's faces, upper-case, at most 24 characters each, ending with
 # the two blank lines that separate one repeat of the page from the next.
-static func page_of(row: Dictionary) -> PackedStringArray:
+static func page_of(row: Dictionary, log_lines: PackedStringArray = PackedStringArray()) -> PackedStringArray:
     var lines := PackedStringArray()
     var host := str(row.get("host", "")).to_upper()
     if host == "":
@@ -407,6 +407,10 @@ static func page_of(row: Dictionary) -> PackedStringArray:
     for c in row.get("clients", []):
         lines.append(("FROM " + str(c).to_upper()).substr(0, 24))
     lines.append("SEEN %s AGO" % format_ago(float(row.get("last_seen_ago", 0))))
+    # A selected tower's log goes on after SEEN, as many lines as the page can hold.
+    var room := GibsonFont.MAX_PAGE_ROWS - lines.size() - 2
+    for n in range(mini(log_lines.size(), maxi(room, 0))):
+        lines.append(log_lines[n])
     lines.append("")
     lines.append("")
     return lines
@@ -414,3 +418,190 @@ static func page_of(row: Dictionary) -> PackedStringArray:
 # A stable value in [0, 1).
 static func hash01(text: String) -> float:
     return float(text.hash() & 0xFFFFFF) / 16777216.0
+
+# ---- selection, the log and the menu --------------------------------------------
+
+const MAX_LOG_LINES := 40
+const MAX_MENU_ITEMS := 12
+const MAX_MENU_BOXES := 4
+const TITLE_CHARS := 22
+
+# A host a viewer may select: it goes into a request's URL.
+static func valid_host(host: String) -> bool:
+    var re := RegEx.new()
+    re.compile("^[a-z0-9._:\\[\\]/-]{1,255}\\z")
+    return re.search(host) != null
+
+# The index of the nearest box the ray enters, or -1. boxes: Array of {"min": Vector3, "max": Vector3}.
+static func pick_box(origin: Vector3, direction: Vector3, boxes: Array) -> int:
+    var best := -1
+    var best_t := INF
+    for i in range(boxes.size()):
+        var lo: Vector3 = boxes[i]["min"]
+        var hi: Vector3 = boxes[i]["max"]
+        var t_min := 0.0
+        var t_max := INF
+        var hit := true
+        for axis in range(3):
+            var o: float = origin[axis]
+            var d: float = direction[axis]
+            if absf(d) < 1.0e-9:
+                if o < lo[axis] or o > hi[axis]:
+                    hit = false
+                    break
+                continue
+            var t1: float = (lo[axis] - o) / d
+            var t2: float = (hi[axis] - o) / d
+            t_min = maxf(t_min, minf(t1, t2))
+            t_max = minf(t_max, maxf(t1, t2))
+            if t_min > t_max:
+                hit = false
+                break
+        if hit and t_min < best_t:
+            best_t = t_min
+            best = i
+    return best
+
+# The index of the rectangle (in the z = 0 plane of the ray's own space) the ray crosses, or -1.
+static func pick_rect(origin: Vector3, direction: Vector3, rects: Array) -> int:
+    if absf(direction.z) < 1.0e-9:
+        return -1
+    var t := -origin.z / direction.z
+    if t < 0.0:
+        return -1
+    var at := origin + direction * t
+    for i in range(rects.size()):
+        if (rects[i] as Rect2).has_point(Vector2(at.x, at.y)):
+            return i
+    return -1
+
+# The unit vector (x, z) of the side of a tower a viewer at `from` faces: the axis the
+# viewer is further along.
+static func face_normal(from: Vector2, tower: Vector2) -> Vector2:
+    var d := from - tower
+    if absf(d.x) >= absf(d.y):
+        return Vector2(1.0 if d.x >= 0.0 else -1.0, 0.0)
+    return Vector2(0.0, 1.0 if d.y >= 0.0 else -1.0)
+
+# Where the camera goes to look at a tower: 9 units out from the face nearest the viewer,
+# eye at min(height * 0.6, 10), looking at the tower at that height.
+static func fly_pose(tower: Vector2, side: float, height: float, from: Vector2) -> Dictionary:
+    var n := face_normal(from, tower)
+    var eye := tower + n * (side * 0.5 + 9.0)
+    var y := minf(height * 0.6, 10.0)
+    return {"eye": Vector3(eye.x, y, eye.y), "target": Vector3(tower.x, y, tower.y)}
+
+static func _text(row: Dictionary, key: String) -> String:
+    var v = row.get(key)
+    return "" if v == null else str(v)
+
+static func port_of(row: Dictionary) -> int:
+    var v = row.get("port")
+    if (typeof(v) == TYPE_INT or typeof(v) == TYPE_FLOAT) and int(v) > 0:
+        return int(v)
+    return -1
+
+# OK, LIVE, REFUSED, or the state's own name, upper-case.
+static func state_word(row: Dictionary) -> String:
+    if bool(row.get("blocked", false)):
+        return "REFUSED"
+    var state := _text(row, "state").to_lower()
+    if state == "finished":
+        return "OK"
+    if state == "active" or state == "pooled":
+        return "LIVE"
+    return state.to_upper() if state != "" else "-"
+
+static func clock_text(unix_time: float, bias_seconds: int) -> String:
+    var d := Time.get_time_dict_from_unix_time(int(unix_time) + bias_seconds)
+    return "%02d:%02d:%02d" % [d["hour"], d["minute"], d["second"]]
+
+# Newest first (smallest `ago`; rows without one keep their order after those with).
+static func newest_first(log: Array) -> Array:
+    var out := log.duplicate()
+    out.sort_custom(func(a, b): return float(a.get("ago", 1.0e12)) < float(b.get("ago", 1.0e12)))
+    return out
+
+# The log rows of one host, from an answer that may hold every host's.
+static func log_of(host: String, rows: Array) -> Array:
+    var out := []
+    for r in rows:
+        if typeof(r) == TYPE_DICTIONARY and str(r.get("host", "")) == host:
+            out.append(r)
+    return out
+
+# `HH:MM:SS <PORT> <STATE>`, newest first, at most 40.
+static func log_lines(log: Array, bias_seconds: int) -> PackedStringArray:
+    var out := PackedStringArray()
+    for r in newest_first(log):
+        if out.size() >= MAX_LOG_LINES:
+            break
+        var port := port_of(r)
+        var stamp := clock_text(float(r["time"]), bias_seconds) if r.has("time") and r["time"] != null else "--:--:--"
+        out.append(("%s %s %s" % [stamp, str(port) if port > 0 else "-", state_word(r)]).substr(0, 24))
+    return out
+
+# [{ "key": String, "label": String, "rows": Array }], busiest first, at most 12.
+static func menu_of(log: Array) -> Array:
+    var groups := {}
+    for r in newest_first(log):
+        var port := port_of(r)
+        var tail := _text(r, "via")
+        if tail == "":
+            tail = _text(r, "source")
+        var label := str(port) if port > 0 else "-"
+        if tail != "":
+            label += " " + tail.to_upper()
+        if not groups.has(label):
+            groups[label] = {"key": label, "label": label, "rows": []}
+        groups[label]["rows"].append(r)
+    var out: Array = groups.values()
+    out.sort_custom(func(a, b):
+        if a["rows"].size() != b["rows"].size():
+            return a["rows"].size() > b["rows"].size()
+        return a["label"] < b["label"])
+    if out.size() > MAX_MENU_ITEMS:
+        out.resize(MAX_MENU_ITEMS)
+    return out
+
+# The path of a URL, cut: "https://h.org/a/b?q=1" -> "/a/b?q=1".
+static func path_of(url: String) -> String:
+    var rest := url
+    var scheme := rest.find("://")
+    if scheme >= 0:
+        rest = rest.substr(scheme + 3)
+    var slash := rest.find("/")
+    return rest.substr(slash) if slash >= 0 else "/"
+
+# { "title": String, "caption": String, "blocked": bool } for one log row.
+static func box_of(row: Dictionary, bias_seconds: int = 0) -> Dictionary:
+    var url := _text(row, "url")
+    var title: String
+    if url != "":
+        title = (_text(row, "method") + " " + path_of(url)).strip_edges()
+    elif _text(row, "label") != "":
+        title = _text(row, "label")
+    elif row.has("time") and row["time"] != null:
+        title = clock_text(float(row["time"]), bias_seconds)
+    else:
+        title = "-"
+    title = title.to_upper().substr(0, TITLE_CHARS)
+    var blocked := bool(row.get("blocked", false))
+    var caption: String
+    if blocked:
+        caption = ("REFUSED " + _text(row, "rule")).strip_edges().to_upper()
+    else:
+        caption = "%s %s %s" % [state_word(row), format_bytes(float(row.get("sent", 0))), format_bytes(float(row.get("received", 0)))]
+    return {"title": title, "caption": caption, "blocked": blocked}
+
+# The header's totals line.
+static func totals_of(row: Dictionary) -> String:
+    var parts := PackedStringArray()
+    parts.append("%d CONNECTIONS" % int(row.get("count", 0)))
+    parts.append(format_bytes(float(row.get("sent", 0))) + " UP")
+    parts.append(format_bytes(float(row.get("received", 0))) + " DOWN")
+    if int(row.get("blocked", 0)) > 0:
+        parts.append("%d REFUSED" % int(row.get("blocked", 0)))
+    if bool(row.get("untunnelled", false)):
+        parts.append("OUTSIDE THE TUNNEL")
+    return " · ".join(parts)
