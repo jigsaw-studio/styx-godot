@@ -270,6 +270,15 @@ func _init() -> void:
     check(seen_at > 0 and with_log[seen_at + 1].contains(":"), "the log follows SEEN")
     check(L.totals_of({"count": 14, "sent": 5217, "received": 90329, "blocked": 3, "untunnelled": true}) == "14 CONNECTIONS · 5.1K UP · 88.2K DOWN · 3 REFUSED · OUTSIDE THE TUNNEL", "totals line")
 
+    # XR scale.
+    var table: float = L.table_scale(40.0)
+    check(is_equal_approx(table, 1.6 / 80.0), "table scale: 1.6 m across")
+    check(L.scale_step(table, 0.0, 0.1, table) == table and L.scale_step(0.5, 0.1, 0.1, table) == 0.5, "scale_step: the dead zone changes nothing")
+    check(is_equal_approx(L.scale_step(0.1, 1.0, 0.5, table), 0.1 * 1.4), "scale_step: up multiplies by 1 + 0.8 * value * delta")
+    check(L.scale_step(0.9, 1.0, 1.0, table) == 1.0 and L.scale_step(table, -1.0, 0.5, table) == table, "scale_step: kept between table-top and life size")
+    check(L.zoom_k(table, table) == 0.0 and L.zoom_k(1.0, table) == 1.0 and is_equal_approx(L.zoom_k((1.0 + table) / 2.0, table), 0.5), "zoom_k: 0 to 1")
+    check(L.life_origin(Vector3(2, 1.7, -3)) == Vector3(2, 0.02, -3), "life_origin: under the viewer, 2 cm up")
+
     # Hash.
     var hv := L.hash01("x")
     check(hv >= 0.0 and hv < 1.0 and hv == L.hash01("x") and L.hash01("x") != L.hash01("y"), "hash01")

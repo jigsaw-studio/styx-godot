@@ -106,7 +106,16 @@ A second view, after the "city of text" sequences of a 1995 film: a city of tran
 ```
 Godot --path Godot_Project -- --viz=gibson --api=http://localhost:8880/api/styx
 ```
-or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, red and night show state as marks: stripes for refused, dashes for outside the tunnel). The camera tours the city by itself; any input takes over: `W A S D` fly along the view, the arrows turn and tilt it, `Page Up` / `Page Down` go up and down, `Space` held is three times faster, `Home` returns overhead, dragging with the left button looks, the wheel moves along the view, and the on-screen stick and pad work on touch. Clicking a tower (a click, not a drag) selects it: it turns the scheme's highlight colour, the camera flies to 9 units from its nearest face, its faces carry its log (`HH:MM:SS <PORT> <STATE>`, newest first) and a menu stands in front of it: the log grouped by port and via (right-aligned, `Up` / `Down` or a click picks one), and beside the picked group its newest four rows as boxes (`GET /PATH` and `OK 1.7K 83.8K`; a refused row is red with `REFUSED <RULE>`). `Escape` or a click on empty space deselects. The tour does not resume while a tower is selected. In XR the city is a table-top model. The visionOS build keeps the bar charts. At most 160 towers are drawn.
+or `?viz=gibson` on the web export. `C` cycles the colour schemes (green, cyan, red and night show state as marks: stripes for refused, dashes for outside the tunnel). The camera tours the city by itself; any input takes over: `W A S D` fly along the view, the arrows turn and tilt it, `Page Up` / `Page Down` go up and down, `Space` held is three times faster, `Home` returns overhead, dragging with the left button looks, the wheel moves along the view, and the on-screen stick and pad work on touch. Clicking a tower (a click, not a drag) selects it: it turns the scheme's highlight colour, the camera flies to 9 units from its nearest face, its faces carry its log (`HH:MM:SS <PORT> <STATE>`, newest first) and a menu stands in front of it: the log grouped by port and via (right-aligned, `Up` / `Down` or a click picks one), and beside the picked group its newest four rows as boxes (`GET /PATH` and `OK 1.7K 83.8K`; a refused row is red with `REFUSED <RULE>`). `Escape` or a click on empty space deselects. The tour does not resume while a tower is selected. In XR the city is a table-top model, 1.6 m across, in front of you; the right hand's beam selects a tower (the right trigger on a tower selects it, on an item of the menu picks it, on empty space deselects), the menu stands 0.9 m ahead at chest height, 0.6 m wide:
+
+| Control | Does |
+|---|---|
+| Right trigger | Select the tower the beam points at, pick a menu item, or deselect |
+| Left thumbstick up / down | Grow the city towards life size (home block under you, board 2 cm above the floor) or shrink it to the table |
+| Left A / X | Next colour scheme |
+| Left B / Y | Jump between table-top and life size |
+
+The teleport (left trigger) and turning (right thumbstick) are unchanged. With passthrough the sky is hidden and the board is smaller, so the room shows around the model; the sky is shown only at life size without passthrough. The visionOS build keeps the bar charts. At most 160 towers are drawn.
 
 ![Gibson](docs/images/styx-gibson.png)
 

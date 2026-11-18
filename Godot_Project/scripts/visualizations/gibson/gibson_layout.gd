@@ -605,3 +605,31 @@ static func totals_of(row: Dictionary) -> String:
     if bool(row.get("untunnelled", false)):
         parts.append("OUTSIDE THE TUNNEL")
     return " · ".join(parts)
+
+# ---- XR: the model's scale ---------------------------------------------------------
+
+const TABLE_WIDTH := 1.6      # metres: the table-top model's width
+const STICK_DEADZONE := 0.15
+const STICK_RATE := 0.8
+
+# The scale at which the city (2 x extent wide) is the table-top model.
+static func table_scale(extent: float) -> float:
+    return TABLE_WIDTH / (2.0 * maxf(extent, 1.0))
+
+# One frame of the thumbstick (up grows the city): multiplicative, kept between the
+# table-top scale and life size (1).
+static func scale_step(scale: float, stick: float, delta: float, table: float) -> float:
+    var low := minf(table, 1.0)
+    if absf(stick) < STICK_DEADZONE:
+        return clampf(scale, low, 1.0)
+    return clampf(scale * (1.0 + STICK_RATE * stick * delta), low, 1.0)
+
+# 0 at the table-top scale, 1 at life size.
+static func zoom_k(scale: float, table: float) -> float:
+    if table >= 1.0:
+        return 1.0
+    return clampf((scale - table) / (1.0 - table), 0.0, 1.0)
+
+# Where the city's origin goes at life size: the home block under the viewer, the board 2 cm above the floor.
+static func life_origin(head: Vector3) -> Vector3:
+    return Vector3(head.x, 0.02, head.z)

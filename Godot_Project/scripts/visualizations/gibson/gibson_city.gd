@@ -76,6 +76,16 @@ var poll_accumulator: float = 0.0
 var _saved := {}
 var _xr_active: bool = false
 var _xr_placed: bool = false
+var _xr_scale: float = -1.0          # -1: the table-top model (follows the city's size); else its scale, up to 1 (life size)
+var _xr_table_origin := Vector3.ZERO
+var _xr_stick: float = 0.0
+var _xr_hover: String = ""           # the tower the right hand points at
+var _xr_pointer: MeshInstance3D
+var _xr_wired: bool = false          # the controllers' signals are connected (once)
+var _xr_menu_spot := Vector2.ZERO    # where the menu stands in the room (x, z), set when a tower is selected
+const XR_ORIGIN := "objects/XROrigin3D"
+const MENU_WIDTH_XR := 0.6           # metres
+const MENU_LOCAL_WIDTH := 5.75       # the menu's content, in its own units
 
 func _ready() -> void:
     scheme_id = Globals.scheme
@@ -380,7 +390,7 @@ func _add_chip_rim(chip: MeshInstance3D) -> void:
             chip.add_child(pin)
 
 func _update_board() -> void:
-    var half := extent + (8.0 if _xr_active else BOARD_MARGIN)
+    var half := extent + (BOARD_MARGIN if not _xr_active else (2.0 if Globals.passthrough_enabled else 8.0))
     (ground.mesh as PlaneMesh).size = Vector2(2.0 * half, 2.0 * half)
 
 # ---- frame ----------------------------------------------------------------
@@ -414,7 +424,8 @@ func _follow_camera() -> void:
         var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") if scene else null
         if xr_camera:
             viewer = xr_camera
-    sky.visible = not _xr_active
+    # In XR the sky is only for life size without passthrough.
+    sky.visible = not _xr_active or (_xr_scale >= 0.999 and not Globals.passthrough_enabled)
     sky.global_position = viewer.global_position
     var local := city_root.to_local(viewer.global_position)
     _ground_material.set_shader_parameter("camera_local", local)
@@ -453,6 +464,8 @@ func _animate_towers(delta: float) -> void:
         var level := GibsonLayout.brightness_of(row)
         if int(row.get("open", 0)) > 0:
             level *= 1.0 + 0.15 * sin(TAU * clock / 2.0)
+        if host == _xr_hover:
+            level *= 1.25
         var arrived: float = clock - t["arrived"]
         if arrived < ARRIVAL_SECONDS:
             level *= 1.0 + 0.25 * (1.0 - arrived / ARRIVAL_SECONDS)
@@ -616,13 +629,15 @@ func _unhandled_input(event: InputEvent) -> void:
         _update_menu()
         get_viewport().set_input_as_handled()
 
-# A click that was not a drag: an item of the menu, else a tower, else nothing.
+# A click that was not a drag.
 func _click(at: Vector2) -> void:
     var viewport_camera := get_viewport().get_camera_3d()
     if viewport_camera == null:
         return
-    var origin := viewport_camera.project_ray_origin(at)
-    var direction := viewport_camera.project_ray_normal(at)
+    _act_on_ray(viewport_camera.project_ray_origin(at), viewport_camera.project_ray_normal(at))
+
+# What a click or a trigger on a world-space ray does: an item of the menu, else a tower, else deselect.
+func _act_on_ray(origin: Vector3, direction: Vector3) -> void:
     if selected != "" and menu.visible:
         var to_menu := menu.global_transform.affine_inverse()
         var item := menu.item_at(to_menu * origin, (to_menu.basis * direction).normalized())
@@ -631,8 +646,7 @@ func _click(at: Vector2) -> void:
             _update_menu()
             return
     var to_city := city_root.global_transform.affine_inverse()
-    var hit := _tower_hit(to_city * origin, (to_city.basis * direction).normalized())
-    _select(hit)
+    _select(_tower_hit(to_city * origin, (to_city.basis * direction).normalized()))
 
 # The host of the tower a ray (in the city's space) enters first, or "".
 func _tower_hit(origin: Vector3, direction: Vector3) -> String:
@@ -674,7 +688,14 @@ func _select(host: String) -> void:
     _set_page(host)
     _fetch_log()
     _update_menu()
-    if not _xr_active:
+    if _xr_active:
+        var head := _xr_head()
+        if head:
+            var forward := -head.global_transform.basis.z
+            forward.y = 0.0
+            forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
+            _xr_menu_spot = Vector2(head.global_position.x + forward.x * 0.9, head.global_position.z + forward.z * 0.9)
+    else:
         var t: Dictionary = towers[host]
         var from := city_root.to_local(camera.global_position)
         var node: MeshInstance3D = t["node"]
@@ -723,22 +744,39 @@ func _update_menu() -> void:
 func _place_menu() -> void:
     if not towers.has(selected) or not menu.visible:
         return
+    if _xr_active:
+        _place_menu_xr()
+        return
     var t: Dictionary = towers[selected]
     var node: MeshInstance3D = t["node"]
     var viewer := city_root.to_local(camera.global_position)
-    if _xr_active:
-        var scene := _scene()
-        var head := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") as Node3D if scene else null
-        if head:
-            viewer = city_root.to_local(head.global_position)
     var at := Vector2(node.position.x, node.position.z)
     var n := GibsonLayout.face_normal(Vector2(viewer.x, viewer.z), at)
     var centre := at + n * (float(t["side"]) / 2.0 + 0.3)
     var top := maxf(minf(float(t["height"]), 9.0), menu.height())
     var flat := Vector2(viewer.x - centre.x, viewer.z - centre.y)
     var yaw := atan2(flat.x, flat.y) if flat.length() > 0.001 else 0.0
+    menu.scale = Vector3.ONE * GibsonMenu.SCALE
     menu.rotation = Vector3(0.0, yaw, 0.0)
     menu.position = Vector3(centre.x, top, centre.y) + menu.basis.x * 0.2
+
+# In XR the menu is not scaled with the city: 0.6 m wide, 0.9 m in front of where the
+# viewer was when the tower was selected, its middle at 1.2 m, facing the viewer.
+func _place_menu_xr() -> void:
+    var head := _xr_head()
+    if head == null:
+        return
+    var k := MENU_WIDTH_XR / MENU_LOCAL_WIDTH
+    var flat := Vector2(head.global_position.x - _xr_menu_spot.x, head.global_position.z - _xr_menu_spot.y)
+    var yaw := atan2(flat.x, flat.y) if flat.length() > 0.001 else 0.0
+    var basis := Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3.ONE * k)
+    var half_height := menu.height() / GibsonMenu.SCALE * k / 2.0
+    var origin := Vector3(_xr_menu_spot.x, 1.2 + half_height, _xr_menu_spot.y) + basis.x * 0.2
+    menu.global_transform = Transform3D(basis, origin)
+
+func _xr_head() -> Node3D:
+    var scene := _scene()
+    return scene.get_node_or_null(XR_ORIGIN + "/XRCamera3D") as Node3D if scene else null
 
 func _apply_scheme() -> void:
     palette = GibsonSchemes.palette(scheme_id)
@@ -777,6 +815,9 @@ func _present() -> void:
         _xr_placed = false
         if not xr:
             camera.make_current()
+            _xr_hover = ""
+            if _xr_pointer:
+                _xr_pointer.visible = false
         _update_board()
     if xr:
         _present_xr()
@@ -805,11 +846,10 @@ func _present_flat() -> void:
         world_env.environment.background_mode = Environment.BG_COLOR
         world_env.environment.background_color = Color.BLACK
 
-# The table-top model is 1.6 m across.
-func _model_basis() -> Basis:
-    var k := 1.6 / (2.0 * extent)
-    return Basis.from_scale(Vector3(k, k, k))
-
+# The model in XR: a table-top city 1.6 m across 1.2 m in front of the viewer (board at
+# 0.9 m), which the left thumbstick grows towards life size: there the home block is under
+# the viewer and the board 2 cm above the floor. The origin moves with the scale, so the
+# city grows around where it stands.
 func _present_xr() -> void:
     var scene := _scene()
     if camera.current:
@@ -817,21 +857,83 @@ func _present_xr() -> void:
     var floor_node: Node = scene.get_node_or_null("stage/Floor") if scene else null
     if floor_node:
         floor_node.visible = true
-    if _xr_placed:
-        city_root.global_transform.basis = _model_basis()
-    if _xr_placed or scene == null:
+    var head := _xr_head()
+    if head == null:
         return
-    var xr_camera := scene.get_node_or_null("objects/XROrigin3D/XRCamera3D") as Node3D
-    if xr_camera == null:
+    _xr_wire(scene)
+    if not _xr_placed:
+        var forward := -head.global_transform.basis.z
+        forward.y = 0.0
+        forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
+        _xr_table_origin = Vector3(head.global_position.x, 0.9, head.global_position.z) + forward * 1.2
+        _xr_placed = true
+    var table := GibsonLayout.table_scale(extent)
+    var current := table if _xr_scale < 0.0 else clampf(_xr_scale, table, 1.0)
+    var next := GibsonLayout.scale_step(current, _xr_stick, get_process_delta_time(), table)
+    if next != current:
+        current = next
+        _xr_scale = -1.0 if current <= table + 1.0e-4 else current
+    var origin := _xr_table_origin.lerp(GibsonLayout.life_origin(head.global_position), GibsonLayout.zoom_k(current, table))
+    city_root.global_transform = Transform3D(Basis.from_scale(Vector3.ONE * current), origin)
+    _xr_point(scene)
+
+# The controllers' signals, connected once: right trigger selects, left thumbstick scales,
+# left A/X the next scheme, left B/Y jumps between table-top and life size. Nothing here
+# touches the teleport (left trigger) or the turn (right thumbstick).
+func _xr_wire(scene: Node) -> void:
+    if _xr_wired:
         return
-    # A table-top model, 1.2 m in front of the viewer, its board at 0.9 m.
-    var head := xr_camera.global_transform
-    var forward := -head.basis.z
-    forward.y = 0.0
-    forward = forward.normalized() if forward.length() > 0.001 else Vector3.FORWARD
-    city_root.global_transform = Transform3D(_model_basis(),
-        Vector3(head.origin.x, 0.9, head.origin.z) + forward * 1.2)
-    _xr_placed = true
+    _xr_wired = true
+    var left := scene.get_node_or_null(XR_ORIGIN + "/LeftHand") as XRController3D
+    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as XRController3D
+    if left:
+        left.button_pressed.connect(_xr_left_button)
+        left.input_vector2_changed.connect(_xr_left_stick)
+    if right:
+        right.button_pressed.connect(_xr_right_button)
+        _xr_pointer = MeshInstance3D.new()
+        _xr_pointer.name = "gibson_pointer"
+        var beam := BoxMesh.new()
+        beam.size = Vector3(0.002, 0.002, 3.0)
+        _xr_pointer.mesh = beam
+        var material := StandardMaterial3D.new()
+        material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+        material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+        material.albedo_color = Color(0.5, 0.5, 0.5)
+        _xr_pointer.material_override = material
+        _xr_pointer.position = Vector3(0.0, 0.0, -1.5)
+        right.add_child(_xr_pointer)
+
+func _xr_left_stick(action: String, value: Vector2) -> void:
+    if action == "primary":
+        _xr_stick = value.y
+
+func _xr_left_button(action: String) -> void:
+    if action == "ax_button":
+        scheme_id = GibsonSchemes.next_id(scheme_id)
+        _apply_scheme()
+    elif action == "by_button":
+        _xr_scale = 1.0 if _xr_scale < 0.0 else -1.0
+        _xr_placed = false
+
+func _xr_right_button(action: String) -> void:
+    if action != "trigger_click" or not _xr_active:
+        return
+    var scene := _scene()
+    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as Node3D if scene else null
+    if right:
+        _act_on_ray(right.global_position, -right.global_transform.basis.z)
+
+# The pointer is shown only in XR; the tower it points at is the hovered one.
+func _xr_point(scene: Node) -> void:
+    var right := scene.get_node_or_null(XR_ORIGIN + "/RightHand") as Node3D
+    if _xr_pointer:
+        _xr_pointer.visible = true
+    if right == null:
+        _xr_hover = ""
+        return
+    var to_city := city_root.global_transform.affine_inverse()
+    _xr_hover = _tower_hit(to_city * right.global_position, (to_city.basis * -right.global_transform.basis.z).normalized())
 
 func _restore_presentation() -> void:
     for key in _saved:
