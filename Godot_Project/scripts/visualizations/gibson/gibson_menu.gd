@@ -17,6 +17,7 @@ const BOX_PITCH := 0.98
 const BOX_X := 0.35                  # boxes start this far right of the items' right edge
 const BAR := 0.03
 const PRIORITY := 10
+const LEFT := -3.1                   # the header's and the items' left edge
 const SCALE := 1.3                   # the node's scale: about 7.5 city units wide, which reads from 9 units away
 
 var host: String = ""
@@ -30,17 +31,15 @@ var palette: Dictionary = {}
 var _font: Font = load(FONT_PATH) if ResourceLoader.exists(FONT_PATH) else null
 var _item_rects: Array = []          # Rect2 per item, in local x, y
 var _signature: String = ""
-var _material: StandardMaterial3D
-var _blocked_material: StandardMaterial3D
-var _highlight_material: StandardMaterial3D
 
 func _init() -> void:
     name = "menu"
     scale = Vector3.ONE * SCALE
     visible = false
 
-func _bar_material() -> StandardMaterial3D:
+func _bar_material(colour: Color) -> StandardMaterial3D:
     var m := StandardMaterial3D.new()
+    m.albedo_color = colour
     m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
     m.no_depth_test = true
     m.render_priority = PRIORITY
@@ -68,9 +67,6 @@ func hide_menu() -> void:
     visible = false
     _signature = ""
     host = ""
-
-func _text_colour() -> Color:
-    return palette["text"]["normal"]
 
 func _label(text: String, colour: Color, alignment: HorizontalAlignment, scale: float = 1.0) -> Label3D:
     var label := Label3D.new()
@@ -110,22 +106,17 @@ func _rebuild() -> void:
     for child in get_children():
         child.queue_free()
     _item_rects.clear()
-    _material = _bar_material()
-    _highlight_material = _bar_material()
-    _blocked_material = _bar_material()
-    var text_colour := _text_colour()
+    var text_colour: Color = palette["text"]["normal"]
     var highlight: Color = palette["highlight"]
     var refused: Color = palette["glass"]["blocked"]
-    _material.albedo_color = text_colour
-    _highlight_material.albedo_color = highlight
-    _blocked_material.albedo_color = refused
+    var highlight_material := _bar_material(highlight)
+    var blocked_material := _bar_material(refused)
 
-    var left := -3.1
     var header := _label(host.to_upper(), highlight, HORIZONTAL_ALIGNMENT_LEFT, 1.15)
-    header.position = Vector3(left, 0.0, 0.0)
+    header.position = Vector3(LEFT, 0.0, 0.0)
     add_child(header)
     var totals := _label(GibsonLayout.totals_of(title_row), text_colour, HORIZONTAL_ALIGNMENT_LEFT, 0.75)
-    totals.position = Vector3(left, -0.4, 0.0)
+    totals.position = Vector3(LEFT, -0.4, 0.0)
     add_child(totals)
 
     var top := -0.95
@@ -136,7 +127,7 @@ func _rebuild() -> void:
         elif state == "ready":
             message = "NOTHING RECORDED"
         var line := _label(message, text_colour, HORIZONTAL_ALIGNMENT_LEFT)
-        line.position = Vector3(left, top, 0.0)
+        line.position = Vector3(LEFT, top, 0.0)
         add_child(line)
         return
 
@@ -145,14 +136,14 @@ func _rebuild() -> void:
         var item := _label(String(groups[i]["label"]) + " >", highlight if i == picked else text_colour, HORIZONTAL_ALIGNMENT_RIGHT)
         item.position = Vector3(0.0, y, 0.0)
         add_child(item)
-        _item_rects.append(Rect2(-3.1, y - LINE * 0.5, 3.1, LINE))
+        _item_rects.append(Rect2(LEFT, y - LINE * 0.5, -LEFT, LINE))
 
     # The picked item's boxes, stacked downward from its line.
     var rows: Array = groups[picked]["rows"]
     var y0 := top - LINE * picked
     for b in range(mini(rows.size(), GibsonLayout.MAX_MENU_BOXES)):
         var box: Dictionary = GibsonLayout.box_of(rows[b], bias_seconds)
-        var material: StandardMaterial3D = _blocked_material if box["blocked"] else _highlight_material
+        var material: StandardMaterial3D = blocked_material if box["blocked"] else highlight_material
         var colour: Color = refused if box["blocked"] else highlight
         var x := BOX_X
         var yy := y0 + 0.17 - BOX_PITCH * b

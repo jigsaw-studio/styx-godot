@@ -109,8 +109,7 @@ func _process(delta: float) -> void:
             _udp_waiting += delta
             if _udp_waiting >= UDP_ANSWER_SECONDS:
                 # No complete answer: drop the fragments so a late one of this answer cannot join the next.
-                _udp_waiting = -1.0
-                packet_fragments.clear()
+                cancel()
                 request_failed.emit(api_endpoint)
 
 func receive_udp_response() -> void:
