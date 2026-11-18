@@ -44,7 +44,7 @@ var _streak_material: ShaderMaterial
 var _rim_material: StandardMaterial3D
 var _font: Font = load(FONT_PATH) if ResourceLoader.exists(FONT_PATH) else null
 var cars: Array = []                 # {host, points, lengths, along, dir, color, flash}
-var links: Dictionary = {}           # source + ">" + target -> {next, seq, row, source, host, route}
+var links: Dictionary = {}           # source > via > target -> {next, seq, row, source, host, route}
 
 var scheme_id: String = "state"
 var palette: Dictionary = {}
@@ -160,7 +160,8 @@ func _poll() -> void:
         api.send_request()
     else:
         hosts_api.send_request()
-        links_api.send_request()
+        if mode != "matrix":   # a request that failed at once has already switched the mode and freed both
+            links_api.send_request()
 
 # The first /v1/hosts answer decides the mode: a server without the new API is asked
 # for the Matrix feed instead, and the new API is not asked again until the next time
@@ -245,7 +246,9 @@ func _rebuild() -> void:
     # One traffic link per link row; a link keeps its clock across answers.
     var live := {}
     for l in link_set:
-        var id := "%s>%s" % [l["source"], l["target"]]
+        # One link per (source, via, target), as the server counts them: rows that differ only in
+        # `via` are separate links, and keying on the pair alone would merge them into one.
+        var id := "%s>%s>%s" % [l["source"], l.get("via", ""), l["target"]]
         live[id] = true
         var entry: Dictionary = links.get(id, {})
         if entry.is_empty():

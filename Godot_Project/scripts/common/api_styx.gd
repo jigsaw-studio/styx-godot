@@ -80,6 +80,7 @@ func send_request() -> void:
             print("Sent via UDP: ", json_str)
         else:
             print("Failed to send request via UDP")
+            request_failed.emit(api_endpoint)
     else:
         if request_in_flight:
             print("Dropping HTTP request, one is still in flight")
